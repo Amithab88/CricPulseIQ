@@ -1,4 +1,4 @@
-# CricPulseI
+# CricPulseIQ
 
 # CricketIQ Backend
 
