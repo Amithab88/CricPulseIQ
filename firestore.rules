@@ -1,0 +1,66 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Core function to authenticate users
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Role-based helper: if using custom claims later
+    function isScorer() {
+      return isAuthenticated() && request.auth.token.role == 'scorer';
+    }
+
+    match /clubs/{clubId} {
+      allow read: if true; // Fans can view clubs
+      allow write: if isAuthenticated(); // Restrict to admins/managers
+      
+      match /players/{playerId} {
+        allow read: if true;
+        allow write: if isAuthenticated();
+      }
+      
+      match /matches/{matchMatchId} {
+        allow read: if true;
+        allow write: if isAuthenticated();
+      }
+    }
+    
+    match /matches/{matchId} {
+      allow read: if true; // Real-time UI reads
+      allow write: if isAuthenticated(); // Only scorers input matches
+      
+      match /deliveries/{deliveryId} {
+        allow read: if true; // Live delivery feed
+        allow write: if isAuthenticated(); // Scorers logging balls
+      }
+    }
+    
+    match /playerStats/{playerId} {
+      allow read: if true;
+      allow write: if isAuthenticated(); // Backend AI worker writes here
+      
+      match /seasons/{seasonId} {
+        allow read: if true;
+        allow write: if isAuthenticated();
+      }
+    }
+    
+    match /tournaments/{tournamentId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+      
+      match /standings/{teamId} {
+        allow read: if true;
+        allow write: if isAuthenticated();
+      }
+      
+      match /fixtures/{fixtureId} {
+         allow read: if true;
+         allow write: if isAuthenticated();
+      }
+    }
+  }
+}

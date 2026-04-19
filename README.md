@@ -1,150 +1,124 @@
 # CricPulseIQ
 
-# CricketIQ Backend
+> AI-powered cricket intelligence platform for grassroots and club-level cricket.  
+> Built with Firebase Genkit · Vertex AI · Firestore · React Native (Expo)
 
-Production-grade Node.js/TypeScript API powering the CricketIQ platform.
+---
 
-## Stack
+## 📁 Project Structure
 
-| Layer | Technology | Why |
-|-------|-----------|-----|
-| Runtime | Node.js 20 + TypeScript | Type safety, fast async I/O for WebSocket fan-out |
-| Framework | Express 4 | Mature, well-understood, easy to test |
-| Database | PostgreSQL 15 | ACID transactions for delivery logging, JSONB for wagon wheel |
-| Cache | Redis 7 | Live score state (~1ms reads), AI report cache, session store |
-| Real-time | WebSocket (ws) | Sub-10ms delivery broadcast to all match viewers |
-| AI | Anthropic Claude | Scout reports, live commentary, platform insights |
-| Auth | JWT + bcrypt | Stateless — scales horizontally without session store |
-| Validation | zod + express-validator | Two layers: schema validation + request validation |
-| Logging | Winston | Structured JSON logs — works with CloudWatch/Datadog |
+```
+CricPulseIQ/
+├── backend/
+│   └── src/
+│       ├── index.ts                    ← Genkit config + all exports
+│       ├── prompts/
+│       │   ├── systemPrompt.ts         ← Shared AI identity + context builders
+│       │   └── prompts.ts              ← definePrompt() definitions
+│       ├── flows/                      ← 10 Genkit AI flows
+│       │   ├── onboardingWelcome.ts
+│       │   ├── liveCommentary.ts       ← streamingGenerate()
+│       │   ├── momentumAnalysis.ts
+│       │   ├── playerWeakness.ts
+│       │   ├── fieldPlacement.ts
+│       │   ├── aiCoachChat.ts          ← streamingGenerate() + two-pass
+│       │   ├── matchStrategyFlow.ts    ← structuredOutput
+│       │   ├── scoutingReportsFlow.ts  ← structuredOutput
+│       │   ├── teamOfTournament.ts
+│       │   └── qualificationScenarios.ts
+│       ├── functions/
+│       │   ├── matchPipeline.ts        ← Cloud Functions v2 (onDocumentCreated/Updated/onCall)
+│       │   └── httpHandler.ts          ← onFlow() HTTP exposure + runFlow() chaining
+│       └── types/
+│           └── schemas.ts              ← Zod schemas + TypeScript types
+├── frontend/
+│   └── src/
+│       ├── config/firebase.ts          ← Firebase client init
+│       ├── hooks/useCricPulseIQ.ts     ← All React Native hooks
+│       └── screens/
+│           ├── HomeScreen.tsx
+│           ├── LiveScorecardScreen.tsx  ← wired to useLiveScorecard
+│           ├── AnalysisScreen.tsx
+│           ├── AICoachScreen.tsx        ← wired to useAICoach (streaming)
+│           ├── PlayerProfileScreen.tsx
+│           ├── WagonWheelScreen.tsx
+│           ├── MatchStrategyScreen.tsx
+│           └── TournamentManagerScreen.tsx
+├── docs/FIRESTORE_SCHEMA.md
+├── firestore.rules
+├── firestore.indexes.json
+├── firebase.json
+└── .env.template
+```
 
-## Quick start
+---
 
+## 🚀 Quick Start
+
+### 1. Firebase Setup
 ```bash
-# 1. Install dependencies
+npm install -g firebase-tools
+firebase login
+firebase init    # select Firestore, Functions, Storage
+```
+
+### 2. Backend (Genkit + Cloud Functions)
+```bash
+cd backend
 npm install
-
-# 2. Copy and configure environment
-cp .env.example .env
-# Set DATABASE_URL, REDIS_URL, JWT_SECRET, ANTHROPIC_API_KEY
-
-# 3. Start infrastructure
-docker-compose up postgres redis -d
-
-# 4. Run migrations
-npm run migrate
-
-# 5. Seed demo data
-npm run seed
-
-# 6. Start dev server
-npm run dev
-# → API on http://localhost:4000
-# → WebSocket on ws://localhost:4000/ws
+cp ../.env.template .env.local   # fill in your credentials
+npm run dev    # starts Genkit Dev UI at http://localhost:4000
 ```
 
-## Key architectural decisions
-
-### Why every ball is immutable
-The `deliveries` table is insert-only. Scorers can log a correction
-delivery (e.g. `extra_type: 'correction'`) but never UPDATE a row.
-This means career stats are always reproducible from source data —
-no incremental corruption over time.
-
-### Why career stats are pre-computed
-`player_career_stats` is a cache of computed aggregates. It's rebuilt
-from `deliveries` after every match via `statsWorker.ts`. This means:
-- Talent search queries hit a small indexed table (~5k rows) not 1M+ deliveries
-- Any delivery correction automatically propagates to career stats on next rebuild
-- The rebuild is idempotent — safe to re-run as many times as needed
-
-### Why materialised views for leaderboards
-`mv_batting_leaderboard` and `mv_bowling_leaderboard` are refreshed
-every 15 minutes with `CONCURRENTLY` — zero read blocking. The leaderboard
-page always reads from these views, never from the base tables.
-
-### WebSocket scaling
-Currently single-server with in-memory room registry. When horizontal
-scaling is needed (>500 concurrent matches), replace `matchRooms` Map
-with Redis Pub/Sub. Each server subscribes to match channels in Redis;
-`broadcastToMatch` publishes to Redis instead of direct socket send.
-
-### AI cost management
-Every AI call result is cached in Redis for 1 hour and logged in
-`ai_analysis_cache`. The talent search page re-uses cached reports.
-Target: < 100k tokens/day at launch (< ₹500/day in API costs).
-
-## API reference
-
-### Core scoring flow
-```
-POST /api/v1/scoring/delivery          — Log a ball (scorer app)
-GET  /api/v1/scoring/match/:id/live    — Current match state (viewer app, served from Redis)
-GET  /api/v1/scoring/match/:id/scorecard — Full batting + bowling tables
+### 3. Frontend (Expo)
+```bash
+cd frontend
+npm install
+cp ../.env.template .env.local
+npm start      # starts Expo dev server
 ```
 
-### Player / talent
-```
-GET  /api/v1/players/search            — Talent discovery with filters
-GET  /api/v1/players/:id/career        — Full career profile
-GET  /api/v1/players/:id/scout-report  — AI scouting report (selector tier)
-```
+### 4. Deploy
+```bash
+# Deploy Firestore rules + indexes
+firebase deploy --only firestore
 
-### Leaderboards
-```
-GET  /api/v1/leaderboard/batting       — Cross-club run scorers
-GET  /api/v1/leaderboard/bowling       — Cross-club wicket takers
+# Deploy Cloud Functions
+cd backend && npm run build
+firebase deploy --only functions
 ```
 
-### Live matches
-```
-GET  /api/v1/matches/live              — All currently live matches
-```
+---
 
-### WebSocket protocol
-```
-Client → Server:
-  { type: "JOIN_MATCH",  payload: { matchId: "uuid" } }
-  { type: "LEAVE_MATCH", payload: {} }
-  { type: "PING",        payload: {} }
+## 🧠 AI Flows Reference
 
-Server → Client:
-  { type: "CONNECTED",   payload: { userId, role, serverTime } }
-  { type: "JOINED",      payload: { matchId, viewers: N } }
-  { type: "LIVE_STATE",  payload: LiveScoreState }         — on join (from cache)
-  { type: "DELIVERY",    payload: { deliveryId, runs, isWicket, liveState } }
-  { type: "PONG",        payload: { ts: timestamp } }
-  { type: "ERROR",       payload: { message } }
-```
+| Flow | Model | API Pattern |
+|---|---|---|
+| `onboardingWelcomeFlow` | Flash | `generate()` + structured output |
+| `liveCommentaryFlow` | Flash | `streamingGenerate()` + SSE |
+| `momentumAnalysisFlow` | Flash | `generate()` + structured output |
+| `playerWeaknessFlow` | Pro | `generate()` + structured output |
+| `fieldPlacementFlow` | Flash | `generate()` + structured output |
+| `aiCoachChatFlow` | Pro | `streamingGenerate()` + two-pass |
+| `matchStrategyFlow` | Pro | `generate()` + structured output |
+| `scoutingReportsFlow` | Pro | `generate()` + structured output |
+| `teamOfTournamentFlow` | Pro | `generate()` + structured output |
+| `qualificationScenariosFlow` | Pro | `generate()` + structured output |
 
-## Scaling to 1 million users
+---
 
-| Bottleneck | Solution |
-|-----------|---------|
-| Single DB write | PgBouncer connection pooler in front of Postgres |
-| WebSocket fan-out | Replace in-memory rooms with Redis Pub/Sub |
-| Live score reads | Redis already handles this — no change needed |
-| Leaderboard queries | Materialised views + read replicas |
-| AI cost | Batch commentary generation, aggressive caching |
-| Career stats recompute | Move queue from in-memory to BullMQ + Redis |
-| Static assets | CDN (CloudFront/BunnyCDN) |
+## 🔁 Data Pipelines
 
-At 1M users, the only component that needs fundamental re-architecture
-is the WebSocket layer. Everything else scales vertically or with
-read replicas until ~100k concurrent users.
+**Pipeline 1 — Real-time (per ball)**  
+`Scorer writes delivery` → `onDeliveryCreated` → score update + `runFlow(commentary)` + `runFlow(momentum)` → writes `aiCommentary` to delivery doc → `onSnapshot` pushes to fan UI
 
-## Environment variables
+**Pipeline 2 — Async (on match end)**  
+`match.status = completed` → `onMatchCompleted` → delivery aggregation → `playerStats/seasons` → `runFlow(teamOfTournament)` → tournament leaderboard refresh
 
-```env
-# Required
-DATABASE_URL=postgresql://user:password@localhost:5432/cricketiq
-REDIS_URL=redis://localhost:6379
-JWT_SECRET=your-256-bit-secret-here
-ANTHROPIC_API_KEY=sk-ant-...
+---
 
-# Optional
-PORT=4000
-NODE_ENV=production
-ALLOWED_ORIGINS=https://cricketiq.app,https://admin.cricketiq.app
-LOG_LEVEL=info
-```
+## 🔐 Environment Variables
+See `.env.template` for all required keys:
+- `EXPO_PUBLIC_FIREBASE_*` — Firebase client config
+- `EXPO_PUBLIC_GENKIT_URL` — Genkit backend URL
+- `GCP_PROJECT_ID` + `GCP_LOCATION` — Vertex AI project
