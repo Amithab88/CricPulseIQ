@@ -1,97 +1,91 @@
-import { defineFlow } from '@genkit-ai/core';
+import { defineFlow, generate } from '@genkit-ai/core';
 import { gemini15Pro } from '@genkit-ai/vertexai';
-import { generate } from '@genkit-ai/core';
 import * as z from 'zod';
-import { CRICPULSEIQ_SYSTEM_PROMPT, buildPlayerContext } from '../prompts/systemPrompt';
+
+const PlayerWeaknessInput = z.object({
+  playerName: z.string(),
+  seasonStats: z.object({
+    vsSpinAvg: z.number(),
+    vsSpinSR: z.number(),
+    vsPaceAvg: z.number(),
+    vsPaceSR: z.number(),
+    powerplayAvg: z.number(),
+    powerplaySR: z.number(),
+    middleOversAvg: z.number(),
+    middleOversSR: z.number(),
+    deathOversAvg: z.number(),
+    deathOversSR: z.number(),
+    dotBallPercentage: z.number(),
+    boundaryPercentage: z.number(),
+  }),
+  recentForm: z.array(z.object({
+    runs: z.number(),
+    balls: z.number(),
+    dismissal: z.string(),
+  })),
+  shotZoneData: z.record(z.string(), z.object({
+    shots: z.number(),
+    runs: z.number(),
+    boundaries: z.number(),
+  })),
+});
+
+const PlayerWeaknessOutput = z.object({
+  biggestWeakness: z.string(),
+  exploitablePatterns: z.array(z.string()),
+  strongestPhase: z.object({
+    phase: z.string(),
+    reason: z.string(),
+  }),
+  bowlingStrategy: z.string(),
+  overallRating: z.enum(["fragile", "inconsistent", "solid", "match-winner"]),
+});
+
+const SYSTEM_PROMPT = `You are an elite cricket analyst working for a grassroots club. You think like a data scientist but communicate like a coach. Be direct. Avoid generic cricket advice — every insight must be grounded in the specific numbers provided.`;
 
 export const playerWeaknessFlow = defineFlow(
   {
     name: 'playerWeaknessFlow',
-    inputSchema: z.object({
-      playerName: z.string(),
-      role: z.string(),
-      recentForm: z.string(),
-      vsSpinRating: z.number(),
-      vsPaceRating: z.number(),
-      phaseRatings: z.object({
-        powerplay: z.number(),
-        middleOvers: z.number(),
-        death: z.number(),
-      }),
-      shotZones: z.record(z.string(), z.number()),
-      deliveryData: z.array(z.object({
-        bowlerType: z.string(),
-        pitchLength: z.string(),
-        pitchLine: z.string(),
-        runs: z.number(),
-        isDismissed: z.boolean(),
-      })).optional(),
-    }),
-    outputSchema: z.object({
-      primaryWeakness: z.string(),
-      secondaryWeakness: z.string(),
-      coldZones: z.array(z.string()),
-      exploitPlan: z.string(),
-      confidenceLevel: z.enum(['Low', 'Medium', 'High']),
-    }),
+    inputSchema: PlayerWeaknessInput,
+    outputSchema: PlayerWeaknessOutput,
   },
   async (input) => {
-    const playerCtx = buildPlayerContext({
-      playerName: input.playerName,
-      role: input.role,
-      recentForm: input.recentForm,
-      vsSpinRating: input.vsSpinRating,
-      vsPaceRating: input.vsPaceRating,
-      phaseRatings: input.phaseRatings,
-    });
+    const { playerName, seasonStats, recentForm, shotZoneData } = input;
 
-    const coldZonesRaw = Object.entries(input.shotZones)
-      .sort(([, a], [, b]) => a - b)
-      .slice(0, 3)
-      .map(([zone]) => zone);
+    const userPrompt = `Analyse ${playerName}'s batting profile from this season's data. Identify:
 
-    const deliverySummary = input.deliveryData
-      ? `Delivery pattern analysis: ${input.deliveryData.length} balls faced — dismissals: ${input.deliveryData.filter(d => d.isDismissed).map(d => `${d.pitchLength} ${d.pitchLine} (${d.bowlerType})`).join(', ') || 'none recorded'}`
-      : 'No delivery-level data available.';
+1. Their single biggest technical weakness (be specific — e.g. "averages 8.2 against off-spin in the powerplay" not "struggles against spin")
+2. Two exploitable patterns in their shot zone data
+3. Their strongest phase and why the team should protect them in that phase
+4. A specific bowling strategy a captain should use against them next match
 
-    const prompt = `${CRICPULSEIQ_SYSTEM_PROMPT}
+SEASON STATS:
+${JSON.stringify(seasonStats, null, 2)}
 
-TASK: Identify this player's primary exploitable weaknesses for opposition planning.
+RECENT FORM:
+${JSON.stringify(recentForm, null, 2)}
 
-PLAYER:
-${playerCtx}
-Cold shot zones (least runs): ${coldZonesRaw.join(', ')}
-${deliverySummary}
+SHOT ZONE DATA:
+${JSON.stringify(shotZoneData, null, 2)}
 
-Return JSON:
-- "primaryWeakness": Most exploitable weakness — be specific (e.g. "Struggles against left-arm pace outside off stump at good length in death overs, SR drops to sub-100").
-- "secondaryWeakness": Second exploitable pattern.
-- "coldZones": Array of 2-3 least productive field zones percentage-wise.
-- "exploitPlan": Bowling plan in 2 sentences — specific length, line, pace type.
-- "confidenceLevel": "Low" | "Medium" | "High" based on data richness.`;
+Return exactly as JSON matching the specified schema.`;
 
-    const response = await generate({
+    const llmResponse = await generate({
       model: gemini15Pro,
-      prompt,
-      config: { temperature: 0.55 },
+      prompt: `${SYSTEM_PROMPT}\n\n${userPrompt}`,
+      config: { temperature: 0.5 },
       output: {
         format: 'json',
-        schema: z.object({
-          primaryWeakness: z.string(),
-          secondaryWeakness: z.string(),
-          coldZones: z.array(z.string()),
-          exploitPlan: z.string(),
-          confidenceLevel: z.enum(['Low', 'Medium', 'High']),
-        }),
+        schema: PlayerWeaknessOutput,
       },
     });
 
-    return response.output() ?? {
-      primaryWeakness: 'Insufficient data.',
-      secondaryWeakness: 'Insufficient data.',
-      coldZones: coldZonesRaw,
-      exploitPlan: 'N/A',
-      confidenceLevel: 'Low' as const,
+    return llmResponse.output() ?? {
+      biggestWeakness: "Unknown technical weakness due to sparse data.",
+      exploitablePatterns: ["No distinct patterns identified.", "Monitor upcoming matches."],
+      strongestPhase: { phase: "Unknown", reason: "Insufficient phase data." },
+      bowlingStrategy: "Use standard stock deliveries until a pattern emerges.",
+      overallRating: "solid",
     };
   }
 );

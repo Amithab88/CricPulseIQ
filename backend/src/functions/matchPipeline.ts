@@ -62,22 +62,52 @@ export const onDeliveryCreated = onDocumentCreated(
       });
     });
 
-    // ── Step B: Fetch over-by-over data for momentum analysis ─────────────
+    // ── Step B: Compute Context for AI ─────────────────────────────
     const prevBalls = await db
       .collection('matches').doc(matchId).collection('deliveries')
       .where('innings', '==', delivery.innings)
       .orderBy('over').orderBy('ball')
       .get();
 
-    const overRunMap = new Map<number, { runs: number; wickets: number }>();
-    for (const d of prevBalls.docs) {
-      const del = d.data() as Delivery;
-      const existing = overRunMap.get(del.over) ?? { runs: 0, wickets: 0 };
-      overRunMap.set(del.over, {
-        runs: existing.runs + del.runs + del.extras,
-        wickets: existing.wickets + (del.isWicket ? 1 : 0),
-      });
+    let partnershipRuns = 0;
+    let partnershipBalls = 0;
+    let batsmanRuns = 0;
+    let batsmanBalls = 0;
+
+    const overRunMap = new Map<number, { runs: number; wickets: number; dots: number }>();
+    
+    // Find the latest wicket to calculate current partnership
+    const deliveries = prevBalls.docs.map(d => d.data() as Delivery);
+    const lastWicketIndex = deliveries.map(d => d.isWicket).lastIndexOf(true);
+    const partnershipDeliveries = lastWicketIndex === -1 ? deliveries : deliveries.slice(lastWicketIndex + 1);
+
+    for (const d of partnershipDeliveries) {
+      partnershipRuns += d.runs + d.extras;
+      if (!['wide', 'no-ball'].includes(d.extraType ?? '')) {
+        partnershipBalls++;
+      }
     }
+
+    for (const d of deliveries) {
+      // Per-over aggregation for momentum
+      const existing = overRunMap.get(d.over) ?? { runs: 0, wickets: 0, dots: 0 };
+      const isDot = d.runs === 0 && d.extras === 0 && !['wide', 'no-ball'].includes(d.extraType ?? '');
+      
+      overRunMap.set(d.over, {
+        runs: existing.runs + d.runs + d.extras,
+        wickets: existing.wickets + (d.isWicket ? 1 : 0),
+        dots: existing.dots + (isDot ? 1 : 0)
+      });
+
+      // Stats for the current batsman
+      if (d.batsmanId === delivery.batsmanId) {
+        batsmanRuns += d.runs;
+        if (d.extraType !== 'wide') {
+          batsmanBalls++;
+        }
+      }
+    }
+
     const overByOverRuns = Array.from(overRunMap.entries())
       .map(([over, data]) => ({ over, ...data }))
       .sort((a, b) => a.over - b.over);
@@ -86,9 +116,9 @@ export const onDeliveryCreated = onDocumentCreated(
     const matchSnap = await matchRef.get();
     const match = matchSnap.data()!;
     const inningsKey = delivery.innings === 1 ? 'homeScore' : 'awayScore';
-    const score = `${match[inningsKey]?.runs ?? 0}/${match[inningsKey]?.wickets ?? 0}`;
-    const battingTeam = delivery.innings === 1 ? match.homeTeam : match.awayTeam;
-    const bowlerTeam = delivery.innings === 1 ? match.awayTeam : match.homeTeam;
+    const scoreText = `${match[inningsKey]?.runs ?? 0}/${match[inningsKey]?.wickets ?? 0}`;
+    const battingTeam = delivery.innings === 1 ? match.homeTeamId : match.awayTeamId;
+    const bowlerTeam = delivery.innings === 1 ? match.awayTeamId : match.homeTeamId;
 
     try {
       const { commentary, newMomentumScore } = await runBallAnalysisPipeline({
@@ -96,18 +126,24 @@ export const onDeliveryCreated = onDocumentCreated(
         battingTeam,
         over: delivery.over,
         ball: delivery.ball,
-        score,
+        score: scoreText,
         currentRunRate: match[inningsKey]?.overs > 0
           ? parseFloat(((match[inningsKey]?.runs ?? 0) / match[inningsKey]?.overs).toFixed(2))
           : 0,
-        batsmanName: delivery.batsmanId, // Caller resolves name; ID used here
+        batsmanName: delivery.batsmanId, 
         bowlerName: delivery.bowlerId,
         runs: delivery.runs,
         extras: delivery.extras,
         isWicket: delivery.isWicket,
-        wicketType: delivery.wicketType ?? undefined,
+        wicketType: delivery.wicketType ?? null,
         shotZone: delivery.wagWheelZone ?? undefined,
         momentum: currentMomentum,
+        partnership: { runs: partnershipRuns, balls: partnershipBalls },
+        batsmanStats: { 
+          runs: batsmanRuns, 
+          balls: batsmanBalls, 
+          sr: batsmanBalls > 0 ? parseFloat(((batsmanRuns / batsmanBalls) * 100).toFixed(2)) : 0 
+        },
         matchId,
         bowlerTeam,
         format: match.format ?? 'T20',

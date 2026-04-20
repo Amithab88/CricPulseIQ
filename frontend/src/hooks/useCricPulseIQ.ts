@@ -68,81 +68,69 @@ async function streamFlow(
 // ═══════════════════════════════════════════════════════════════════════════════
 // useAICoach — multi-turn coaching chat with streaming replies
 // ═══════════════════════════════════════════════════════════════════════════════
-export type ChatMessage = { role: 'user' | 'coach'; content: string };
+export type ChatMessage = { role: 'user' | 'model'; content: string };
 
-export interface PlayerProfileInput {
-  playerName: string;
-  role: string;
+export interface TeamContextInput {
+  clubName: string;
+  upcomingOpponent: string | null;
   recentForm: string;
-  vsSpinRating?: number;
-  vsPaceRating?: number;
-  phaseRatings?: { powerplay?: number; middleOvers?: number; death?: number };
-  shotZones?: Record<string, number>;
+  squad: {
+    name: string;
+    role: string;
+    battingAvg: number;
+    bowlingEcon: number | null;
+    weaknesses: string[];
+    strengths: string[];
+  }[];
+  liveMatchState: {
+    score: string;
+    over: string;
+    runRate: number;
+    target: number | null;
+  } | null;
 }
 
-export function useAICoach(playerProfile: PlayerProfileInput) {
+export function useAICoach(teamContext: TeamContextInput) {
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
-  const [streamBuffer, setStreamBuffer] = useState('');      // partial streaming reply
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [suggestedFollowUps, setSuggestedFollowUps] = useState<string[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [suggestedChips, setSuggestedChips] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const abortRef = useRef(false);
 
-  const sendMessage = useCallback(async (userMessage: string, useStreaming = true) => {
+  const sendMessage = useCallback(async (userMessage: string) => {
     setError(null);
-    abortRef.current = false;
-    const updatedHistory: ChatMessage[] = [...chatHistory, { role: 'user', content: userMessage }];
+    setIsLoading(true);
+    
+    const updatedHistory: ChatMessage[] = [
+      ...chatHistory,
+      { role: 'user', content: userMessage }
+    ];
     setChatHistory(updatedHistory);
 
-    if (useStreaming) {
-      setIsStreaming(true);
-      setStreamBuffer('');
-      try {
-        const fullReply = await streamFlow(
-          'aiCoachChatFlow',
-          { ...playerProfile, chatHistory: updatedHistory, userMessage },
-          (chunk) => {
-            if (!abortRef.current) setStreamBuffer(prev => prev + chunk);
-          },
-        );
-        if (!abortRef.current) {
-          setChatHistory(prev => [...prev, { role: 'coach', content: fullReply }]);
-          setStreamBuffer('');
-        }
-      } catch (err: any) {
-        setError(err.message);
-      } finally {
-        setIsStreaming(false);
-      }
-    } else {
-      // Non-streaming: structured output with follow-ups
-      try {
-        const result = await callFlow<object, { coachReply: string; suggestedFollowUps: string[] }>(
-          'aiCoachChatFlow',
-          { ...playerProfile, chatHistory: updatedHistory, userMessage, streaming: false },
-        );
-        setChatHistory(prev => [...prev, { role: 'coach', content: result.coachReply }]);
-        setSuggestedFollowUps(result.suggestedFollowUps);
-      } catch (err: any) {
-        setError(err.message);
-      }
-    }
-  }, [chatHistory, playerProfile]);
+    try {
+      const result = await callFlow<{ messages: ChatMessage[], teamContext: TeamContextInput }, { reply: string, suggestedChips: string[] }>(
+        'aiCoachChatFlow',
+        { messages: updatedHistory, teamContext }
+      );
 
-  const stopStream = useCallback(() => { abortRef.current = true; setIsStreaming(false); }, []);
+      setChatHistory(prev => [...prev, { role: 'model', content: result.reply }]);
+      setSuggestedChips(result.suggestedChips);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [chatHistory, teamContext]);
+
   const clearHistory = useCallback(() => {
     setChatHistory([]);
-    setSuggestedFollowUps([]);
-    setStreamBuffer('');
+    setSuggestedChips([]);
   }, []);
 
   return {
     chatHistory,
-    streamBuffer,       // partial reply to render while streaming
-    isStreaming,
-    suggestedFollowUps,
+    isLoading,
+    suggestedChips,
     sendMessage,
-    stopStream,
     clearHistory,
     error,
   };
@@ -208,33 +196,43 @@ export function useLiveScorecard(matchId: string) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// useMatchStrategy — async strategy generation
+// useMatchStrategy — one-shot pre-match plan generation
 // ═══════════════════════════════════════════════════════════════════════════════
-export type StrategyInput = {
-  ownTeamName: string;
-  ownPlayers: { name: string; role: string; recentForm: string }[];
-  opponentTeamName: string;
-  opponentPlayers: { name: string; role: string; vsSpinRating?: number; vsPaceRating?: number; weakZones?: string[] }[];
+export interface StrategyInput {
+  ourTeam: {
+    name: string;
+    players: { name: string; role: string; battingAvg: number; bowlingEcon: number | null; recentForm: string; weaknesses: string[] }[];
+    recentResults: string[];
+  };
+  opponent: {
+    name: string;
+    knownStrengths: string[];
+    knownWeaknesses: string[];
+    keyPlayers: { name: string; threat: 'high' | 'medium' | 'low'; howToNeutralise: string }[];
+  };
+  matchFormat: 'T20' | 'ODI' | '40-over';
   venue: string;
-  pitchConditions: string;
-  weather: string;
-  format: 'T20' | 'ODI' | 'Test';
-  tossDecision?: 'bat' | 'bowl';
-};
+  pitchReport: string | null;
+  tossResult: { wonToss: boolean; decision: 'bat' | 'bowl' } | null;
+}
 
-export type StrategyOutput = {
-  battingPlan: string;
-  bowlingPlan: string;
-  keyMatchups: string[];
-  fieldingNotes?: string;
-};
+export interface StrategyOutput {
+  battingOrder: { position: number; name: string; reason: string }[];
+  powerplayStrategy: { batting: string; bowling: string; openingBowlers: string[] };
+  middleOversPlan: string;
+  deathOversTactics: { batting: string; bowling: string; closingBowler: string };
+  bowlingRotations: { over: string; bowler: string; plan: string }[];
+  fieldPlacementPhilosophy: string;
+  riskWarnings: { scenario: string; response: string }[];
+  captainSummary: string;
+}
 
 export function useMatchStrategy() {
   const [strategy, setStrategy] = useState<StrategyOutput | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const generate = useCallback(async (input: StrategyInput) => {
+  const generatePlan = useCallback(async (input: StrategyInput) => {
     setIsLoading(true);
     setError(null);
     try {
@@ -250,7 +248,7 @@ export function useMatchStrategy() {
   }, []);
 
   const reset = useCallback(() => setStrategy(null), []);
-  return { strategy, generate, reset, isLoading, error };
+  return { strategy, generatePlan, reset, isLoading, error };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -259,12 +257,11 @@ export function useMatchStrategy() {
 export function usePlayerProfile(playerId: string, seasonId?: string) {
   const [stats, setStats] = useState<PlayerSeasonStats | null>(null);
   const [scoutingReport, setScoutingReport] = useState<{
-    summary: string;
-    strengths: string[];
-    weaknesses: string[];
-    bowlingLineLength: string;
-    fieldingConfiguration: string;
-    riskRating: 'Low' | 'Medium' | 'High' | 'Danger';
+    paragraph1_profile: string;
+    paragraph2_weaknesses: string;
+    paragraph3_strategy: string;
+    scoutingVerdict: 'avoid' | 'monitor' | 'recruit' | 'prioritise';
+    keyBowlingTactic: string;
   } | null>(null);
   const [isLoadingStats, setIsLoadingStats] = useState(false);
   const [isLoadingReport, setIsLoadingReport] = useState(false);
@@ -288,26 +285,56 @@ export function usePlayerProfile(playerId: string, seasonId?: string) {
     return () => unsub();
   }, [playerId, season]);
 
-  // On-demand scouting via Firebase httpsCallable (auth-aware)
+  // On-demand scouting via Genkit flow
   const fetchScoutingReport = useCallback(async () => {
     if (!stats) { setError('No stats available.'); return null; }
     setIsLoadingReport(true);
     setError(null);
     try {
-      const fns = getFunctions();
-      const callable = httpsCallable<{ playerId: string; seasonId: string }, typeof scoutingReport>(
-        fns, 'generateScoutingReport'
-      );
-      const result = await callable({ playerId, seasonId: season });
-      setScoutingReport(result.data);
-      return result.data;
+      // Mapping Firestore stats to the complex scouting flow input
+      const input = {
+        player: {
+          name: stats.playerId, // ID for now
+          age: 25, // Placeholder or fetch from user
+          battingStyle: 'Right-hand', // Placeholder
+          bowlingStyle: 'Off-break', // Placeholder
+          seasonStats: {
+            matches: stats.matches,
+            runs: stats.runs,
+            avg: stats.avg,
+            strikeRate: stats.strikeRate,
+            highScore: stats.highScore,
+            fifties: stats.fifties,
+            hundreds: stats.hundreds,
+            vsSpinAvg: stats.vsSpinRating, // Simplified mapping
+            vsSpinSR: stats.strikeRate,
+            vsPaceAvg: stats.vsPaceRating,
+            vsPaceSR: stats.strikeRate,
+            powerplayRating: stats.phaseRatings.powerplay,
+            middleOversRating: stats.phaseRatings.middleOvers,
+            deathOversRating: stats.phaseRatings.death,
+            dotBallPct: 40, // Calculated or placeholder
+            boundaryPct: 15, // Calculated or placeholder
+          },
+          shotZones: Object.fromEntries(
+            Object.entries(stats.shotZones).map(([zone, pct]) => [zone, { shots: 10, runs: pct }])
+          ),
+          formTrend: 'consistent' as const,
+          last5Scores: stats.formHistory.slice(-5).map(f => f.runs),
+          careerHighlight: 'Consistent performer across matches.',
+        }
+      };
+
+      const result = await callFlow<typeof input, typeof scoutingReport>('scoutingReportFlow', input);
+      setScoutingReport(result);
+      return result;
     } catch (err: any) {
       setError(err.message);
       return null;
     } finally {
       setIsLoadingReport(false);
     }
-  }, [playerId, season, stats]);
+  }, [stats]);
 
   return { stats, scoutingReport, fetchScoutingReport, isLoadingStats, isLoadingReport, error };
 }
@@ -317,26 +344,26 @@ export function usePlayerProfile(playerId: string, seasonId?: string) {
 // ═══════════════════════════════════════════════════════════════════════════════
 export function useMomentumAnalysis(matchId: string) {
   const [momentumData, setMomentumData] = useState<{
+    verdict: string;
+    turningPoint: string;
+    battingInstruction: string;
+    bowlingInstruction: string;
     momentumScore: number;
-    momentumNarrative: string;
-    turningPoints: { over: number; description: string }[];
-    phaseVerdict: string;
   } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const analyse = useCallback(async (input: {
-    battingTeam: string;
-    bowlingTeam: string;
-    format: 'T20' | 'ODI' | 'Test';
-    innings: number;
-    overByOverRuns: { over: number; runs: number; wickets: number }[];
-    currentMomentum: number;
+    last5Overs: { over: number; runs: number; wickets: number; dots: number }[];
+    currentScore: string;
+    target: number | null;
+    teamBatting: string;
+    teamBowling: string;
   }) => {
     setIsLoading(true);
     setError(null);
     try {
-      const result = await callFlow('momentumAnalysisFlow', { matchId, ...input });
+      const result = await callFlow('momentumAnalysisFlow', input);
       setMomentumData(result as typeof momentumData);
       return result;
     } catch (err: any) {
@@ -344,7 +371,7 @@ export function useMomentumAnalysis(matchId: string) {
     } finally {
       setIsLoading(false);
     }
-  }, [matchId]);
+  }, []);
 
   return { momentumData, analyse, isLoading, error };
 }
@@ -354,23 +381,21 @@ export function useMomentumAnalysis(matchId: string) {
 // ═══════════════════════════════════════════════════════════════════════════════
 export function useFieldPlacement() {
   const [field, setField] = useState<{
-    recommendedField: { position: string; reason: string }[];
-    keyPosition: string;
-    fieldRationale: string;
+    fieldChanges: { moveFrom: string; moveTo: string; reason: string }[];
+    bowlingLineAdjustment: string;
+    primaryWeakness: string;
+    confidenceLevel: 'high' | 'medium' | 'low';
   } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const recommend = useCallback(async (input: {
     batsmanName: string;
-    batsmanShotZones: Record<string, number>;
-    bowlerName: string;
-    bowlerType: string;
-    format: 'T20' | 'ODI' | 'Test';
-    overPhase: 'powerplay' | 'middleOvers' | 'death';
-    score: string;
-    target?: number;
-    currentOver: number;
+    currentDelivery: { totalBalls: number; totalRuns: number; strikeRate: number };
+    shotZones: any;
+    careerZoneData: any | null;
+    bowlingType: 'pace' | 'spin' | 'medium';
+    matchSituation: string;
   }) => {
     setIsLoading(true);
     setError(null);
@@ -386,4 +411,75 @@ export function useFieldPlacement() {
   }, []);
 
   return { field, recommend, isLoading, error };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// useOnboarding — personalised AI welcome briefing
+// ═══════════════════════════════════════════════════════════════════════════════
+export function useOnboarding() {
+  const [welcome, setWelcome] = useState<{
+    welcomeMessage: string;
+    tacticalHint: string | null;
+  } | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const getWelcomeMessage = useCallback(async (input: {
+    userName: string;
+    role: 'scorer' | 'player_coach' | 'fan' | 'organiser';
+    clubName: string;
+    nextMatchOpponent: string | null;
+    nextMatchDate: string | null;
+    teamRecentForm: string;
+  }) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const result = await callFlow<any, typeof welcome>('onboardingWelcomeFlow', input);
+      setWelcome(result);
+      return result;
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  return { welcome, getWelcomeMessage, isLoading, error };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// useWeaknessDetector — deep technical batting analysis
+// ═══════════════════════════════════════════════════════════════════════════════
+export function useWeaknessDetector() {
+  const [analysis, setAnalysis] = useState<{
+    biggestWeakness: string;
+    exploitablePatterns: string[];
+    strongestPhase: { phase: string; reason: string };
+    bowlingStrategy: string;
+    overallRating: 'fragile' | 'inconsistent' | 'solid' | 'match-winner';
+  } | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const analyseWeakness = useCallback(async (input: {
+    playerName: string;
+    seasonStats: any;
+    recentForm: { runs: number; balls: number; dismissal: string }[];
+    shotZoneData: any;
+  }) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const result = await callFlow<any, typeof analysis>('playerWeaknessFlow', input);
+      setAnalysis(result);
+      return result;
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  return { analysis, analyseWeakness, isLoading, error };
 }

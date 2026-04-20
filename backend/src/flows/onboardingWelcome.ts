@@ -1,62 +1,55 @@
-import { defineFlow } from '@genkit-ai/core';
+import { defineFlow, generate } from '@genkit-ai/core';
 import { gemini15Flash } from '@genkit-ai/vertexai';
-import { generate } from '@genkit-ai/core';
 import * as z from 'zod';
-import { CRICPULSEIQ_SYSTEM_PROMPT } from '../prompts/systemPrompt';
+
+const WelcomeInput = z.object({
+  userName: z.string(),
+  role: z.enum(["scorer", "player_coach", "fan", "organiser"]),
+  clubName: z.string(),
+  nextMatchOpponent: z.string().nullable(),
+  nextMatchDate: z.string().nullable(),
+  teamRecentForm: z.string(),
+});
+
+const WelcomeOutput = z.object({
+  welcomeMessage: z.string(),
+  tacticalHint: z.string().nullable(),
+});
+
+const SYSTEM_PROMPT = `You are CricPulseIQ, an AI cricket intelligence assistant for grassroots cricket clubs. You speak in a warm, enthusiastic, but concise tone. You know cricket deeply but explain things simply.`;
 
 export const onboardingWelcomeFlow = defineFlow(
   {
     name: 'onboardingWelcomeFlow',
-    inputSchema: z.object({
-      clubName: z.string(),
-      managerName: z.string(),
-      playerCount: z.number().int(),
-      upcomingMatchDate: z.string().optional(),
-      upcomingOpponent: z.string().optional(),
-    }),
-    outputSchema: z.object({
-      welcomeMessage: z.string(),
-      dailyBriefing: z.string(),
-      quickActions: z.array(z.string()),
-    }),
+    inputSchema: WelcomeInput,
+    outputSchema: WelcomeOutput,
   },
   async (input) => {
-    const matchLine = input.upcomingMatchDate && input.upcomingOpponent
-      ? `Next match: vs ${input.upcomingOpponent} on ${input.upcomingMatchDate}.`
-      : 'No upcoming matches scheduled yet.';
+    const { userName, role, clubName, nextMatchOpponent, nextMatchDate, teamRecentForm } = input;
 
-    const prompt = `${CRICPULSEIQ_SYSTEM_PROMPT}
+    const userPrompt = `Generate a personalised welcome message for ${userName} who has joined as a ${role} for ${clubName}.
 
-TASK: Generate a personalised welcome back message and daily briefing for a club cricket manager.
+${nextMatchOpponent ? `Upcoming match: vs ${nextMatchOpponent}${nextMatchDate ? ` on ${nextMatchDate}` : ''}.
+Recent team form: ${teamRecentForm}.
+Mention the upcoming match and give one sharp tactical insight based on the form.` : ''}
 
-Club: ${input.clubName}
-Manager: ${input.managerName}
-Squad size: ${input.playerCount} players
-${matchLine}
+Keep it under 80 words. Use cricket terminology naturally. End with a motivating one-liner.
 
-Return JSON:
-- "welcomeMessage": A warm but sharp 1-sentence greeting using their name and club name.
-- "dailyBriefing": 2-3 sentences of tactical focus for today — if there's an upcoming match, reference it directly; otherwise suggest training priorities.
-- "quickActions": 3 strings — the most important things they should do now in the app (e.g. "Review Ravi's scouting report before Saturday").`;
+Return exactly as JSON matching the specified schema.`;
 
-    const response = await generate({
+    const llmResponse = await generate({
       model: gemini15Flash,
-      prompt,
-      config: { temperature: 0.75 },
+      prompt: `${SYSTEM_PROMPT}\n\n${userPrompt}`,
+      config: { temperature: 0.7 },
       output: {
         format: 'json',
-        schema: z.object({
-          welcomeMessage: z.string(),
-          dailyBriefing: z.string(),
-          quickActions: z.array(z.string()),
-        }),
+        schema: WelcomeOutput,
       },
     });
 
-    return response.output() ?? {
-      welcomeMessage: `Welcome back, ${input.managerName}.`,
-      dailyBriefing: 'No data available for today\'s briefing.',
-      quickActions: [],
+    return llmResponse.output() ?? {
+      welcomeMessage: `Welcome to ${clubName}, ${userName}! We're excited to have you as our ${role}.`,
+      tacticalHint: null,
     };
   }
 );

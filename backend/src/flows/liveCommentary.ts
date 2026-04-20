@@ -1,111 +1,87 @@
-/**
- * liveCommentary.ts
- * Uses: defineFlow, streamingGenerate, definePrompt, buildMatchContext
- * Model: gemini15Flash for low-latency streaming delivery commentary
- */
-
-import { defineFlow, streamingGenerate } from '@genkit-ai/core';
+import { defineFlow, streamingGenerate, generate } from '@genkit-ai/core';
 import { gemini15Flash } from '@genkit-ai/vertexai';
 import * as z from 'zod';
-import { buildMatchContext } from '../prompts/systemPrompt';
-import { SYSTEM_INSTRUCTION } from '../prompts/prompts';
 
-const LiveCommentaryInputSchema = z.object({
-  innings: z.number().int(),
-  battingTeam: z.string(),
-  over: z.number().int(),
-  ball: z.number().int(),
-  score: z.string(),
-  target: z.number().optional(),
-  currentRunRate: z.number().optional(),
-  requiredRunRate: z.number().optional(),
-  batsmanName: z.string(),
-  bowlerName: z.string(),
-  runs: z.number().int(),
-  extras: z.number().int().default(0),
-  isWicket: z.boolean(),
-  wicketType: z.string().optional(),
-  shotZone: z.string().optional(),
-  momentum: z.number().min(-100).max(100),
-  batsmanRecentForm: z.string().optional(),
-  bowlerRecentForm: z.string().optional(),
-  // Enable streaming mode for live UI ticker
-  streaming: z.boolean().default(false),
+const LiveCommentaryInput = z.object({
+  delivery: z.object({
+    over: z.number(),
+    ball: z.number(),
+    runs: z.number(),
+    extras: z.string().nullable(),
+    isWicket: z.boolean(),
+    wicketType: z.string().nullable(),
+    batsmanName: z.string(),
+    bowlerName: z.string(),
+    wagWheelZone: z.string(),
+  }),
+  matchContext: z.object({
+    score: z.string(),
+    target: z.number().nullable(),
+    runRate: z.number(),
+    requiredRate: z.number().nullable(),
+    partnership: z.object({ runs: z.number(), balls: z.number() }),
+    batsmanStats: z.object({ runs: z.number(), balls: z.number(), sr: z.number() }),
+  }),
 });
+
+const LiveCommentaryOutput = z.object({
+  commentary: z.string(),
+  momentumTag: z.enum(["building", "pressure", "explosion", "collapse", "steady"]),
+});
+
+const SYSTEM_PROMPT = `You are a sharp, witty live cricket commentator for a club-level match. Your commentary is punchy, vivid, and grounded in the action. You are NOT formal — think Ravi Shastri energy meets Twitter cricket. Maximum 2 sentences per delivery.`;
 
 export const liveCommentaryFlow = defineFlow(
   {
     name: 'liveCommentaryFlow',
-    inputSchema: LiveCommentaryInputSchema,
-    outputSchema: z.string(),
+    inputSchema: LiveCommentaryInput,
+    outputSchema: LiveCommentaryOutput,
   },
   async (input, streamingCallback) => {
-    const matchCtx = buildMatchContext({
-      innings: input.innings,
-      battingTeam: input.battingTeam,
-      over: input.over,
-      ball: input.ball,
-      score: input.score,
-      target: input.target,
-      currentRunRate: input.currentRunRate,
-      requiredRunRate: input.requiredRunRate,
-    });
+    const { delivery: d, matchContext: m } = input;
+    
+    const ballDesc = `Ball ${d.over}.${d.ball}: ${d.batsmanName} faces ${d.bowlerName}. ${d.runs} run(s)${d.isWicket ? ', WICKET — ' + d.wicketType : ''}. Shot went to ${d.wagWheelZone}.`;
+    const matchSit = `Match situation: ${m.score}, run rate ${m.runRate}${m.requiredRate ? ', required rate ' + m.requiredRate : ''}.`;
 
-    const momentumLabel =
-      input.momentum > 50  ? 'home side firmly in control'  :
-      input.momentum > 20  ? 'home side edging it'          :
-      input.momentum < -50 ? 'away side firmly in control'  :
-      input.momentum < -20 ? 'away side edging it'          :
-                             'tight contest, could go either way';
+    const userPrompt = `${ballDesc} ${matchSit}
 
-    const ballLine = input.isWicket
-      ? `WICKET — ${input.batsmanName} out ${input.wicketType ?? ''} b ${input.bowlerName}.`
-      : `${input.runs} run${input.runs !== 1 ? 's' : ''} — ${input.batsmanName} off ${input.bowlerName}${input.shotZone ? `, through ${input.shotZone}` : ''}.`;
+Write live commentary for this delivery. If it's a wicket, make it dramatic. If it's a boundary, capture the shot. If it's a dot, build the tension.`;
 
-    const extraCtx = [
-      input.batsmanRecentForm ? `${input.batsmanName} in form: ${input.batsmanRecentForm}` : null,
-      input.bowlerRecentForm  ? `${input.bowlerName} in form: ${input.bowlerRecentForm}`   : null,
-    ].filter(Boolean).join('\n');
-
-    const prompt = `${SYSTEM_INSTRUCTION}
-
-TASK: Write punchy live ball-by-ball commentary. Max 2 sentences. Name both players. Reflect match pressure.
-
-MATCH STATE:
-${matchCtx}
-Momentum: ${momentumLabel}
-
-BALL: ${ballLine}${extraCtx ? `\n\nADDITIONAL CONTEXT:\n${extraCtx}` : ''}`;
-
-    // ── Streaming path: pushes chunks to the UI as they arrive ───────────────
-    if (input.streaming && streamingCallback) {
-      let fullText = '';
+    if (streamingCallback) {
       const { response } = await streamingGenerate({
         model: gemini15Flash,
-        prompt,
-        config: { temperature: 0.88, maxOutputTokens: 120 },
+        prompt: `${SYSTEM_PROMPT}\n\n${userPrompt}`,
+        config: { temperature: 0.8 },
+        output: { format: 'json', schema: LiveCommentaryOutput }
       });
 
       for await (const chunk of response) {
-        const text = chunk.text();
-        fullText += text;
-        streamingCallback(text); // pushes chunk to frontend SSE
+        // In Genkit, streaming structured output usually yields the full object state or chunks.
+        // For simple text streaming, we'd use response.text(). 
+        // For structured streaming, we usually return the final output but can stream partials if supported.
+        // Here we'll just stream the completed output chunks if possible, 
+        // but for a JSON object it's often better to just generate.
+        // However, the user asked for "streaming output". 
+        // We will stream the text chunks of the commentary if we were just doing string, 
+        // but since it's an object, we'll stream the whole object state.
+        streamingCallback(chunk.output());
       }
-
-      return fullText.trim();
+      return (await response).output();
     }
 
-    // ── Non-streaming path: single response ───────────────────────────────────
-    const { response } = await streamingGenerate({
+    const llmResponse = await generate({
       model: gemini15Flash,
-      prompt,
-      config: { temperature: 0.88, maxOutputTokens: 120 },
+      prompt: `${SYSTEM_PROMPT}\n\n${userPrompt}`,
+      config: { temperature: 0.8 },
+      output: {
+        format: 'json',
+        schema: LiveCommentaryOutput,
+      },
     });
 
-    let text = '';
-    for await (const chunk of response) {
-      text += chunk.text();
-    }
-    return text.trim() || '—';
+    return llmResponse.output() ?? {
+      commentary: "No commentary available.",
+      momentumTag: "steady"
+    };
   }
 );

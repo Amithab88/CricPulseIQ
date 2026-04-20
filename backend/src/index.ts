@@ -23,7 +23,7 @@ export { playerWeaknessFlow } from './flows/playerWeakness';
 export { fieldPlacementFlow } from './flows/fieldPlacement';
 export { aiCoachChatFlow } from './flows/aiCoachChat';
 export { matchStrategyFlow } from './flows/matchStrategyFlow';
-export { scoutingReportsFlow } from './flows/scoutingReportsFlow';
+export { scoutingReportFlow } from './flows/scoutingReportsFlow';
 export { teamOfTournamentFlow } from './flows/teamOfTournament';
 export { qualificationScenariosFlow } from './flows/qualificationScenarios';
 

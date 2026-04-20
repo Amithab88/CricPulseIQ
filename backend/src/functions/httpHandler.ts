@@ -14,7 +14,7 @@ import * as z from 'zod';
 import { liveCommentaryFlow } from '../flows/liveCommentary';
 import { aiCoachChatFlow } from '../flows/aiCoachChat';
 import { matchStrategyFlow } from '../flows/matchStrategyFlow';
-import { scoutingReportsFlow } from '../flows/scoutingReportsFlow';
+import { scoutingReportFlow } from '../flows/scoutingReportsFlow';
 import { momentumAnalysisFlow } from '../flows/momentumAnalysis';
 import { playerWeaknessFlow } from '../flows/playerWeakness';
 import { fieldPlacementFlow } from '../flows/fieldPlacement';
@@ -44,8 +44,8 @@ export const httpMatchStrategy = onFlow(
 );
 
 export const httpScoutingReport = onFlow(
-  { name: 'scoutingReportsFlow', authPolicy: noAuth() },
-  scoutingReportsFlow
+  { name: 'scoutingReportFlow', authPolicy: noAuth() },
+  scoutingReportFlow
 );
 
 export const httpMomentumAnalysis = onFlow(
@@ -85,64 +85,66 @@ export const httpQualificationScenarios = onFlow(
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function runBallAnalysisPipeline(params: {
-  // Commentary inputs
+  // Commentary & Context inputs
   innings: number;
   battingTeam: string;
   over: number;
   ball: number;
   score: string;
-  target?: number;
-  currentRunRate?: number;
-  requiredRunRate?: number;
+  target?: number | null;
+  currentRunRate: number;
+  requiredRunRate?: number | null;
   batsmanName: string;
   bowlerName: string;
   runs: number;
   extras: number;
   isWicket: boolean;
-  wicketType?: string;
+  wicketType?: string | null;
   shotZone?: string;
   momentum: number;
-  // Momentum inputs for rolling analysis
+  partnership: { runs: number; balls: number };
+  batsmanStats: { runs: number; balls: number; sr: number };
+  // Momentum inputs
   matchId: string;
   bowlerTeam: string;
   format: 'T20' | 'ODI' | 'Test';
-  overByOverRuns: { over: number; runs: number; wickets: number }[];
+  overByOverRuns: { over: number; runs: number; wickets: number; dots: number }[];
 }): Promise<{ commentary: string; newMomentumScore: number }> {
 
   // Step 1: Generate live commentary for this ball
-  const commentary = await runFlow(liveCommentaryFlow, {
-    innings: params.innings,
-    battingTeam: params.battingTeam,
-    over: params.over,
-    ball: params.ball,
-    score: params.score,
-    target: params.target,
-    currentRunRate: params.currentRunRate,
-    requiredRunRate: params.requiredRunRate,
-    batsmanName: params.batsmanName,
-    bowlerName: params.bowlerName,
-    runs: params.runs,
-    extras: params.extras,
-    isWicket: params.isWicket,
-    wicketType: params.wicketType,
-    shotZone: params.shotZone,
-    momentum: params.momentum,
-    streaming: false,
+  const flowOutput = await runFlow(liveCommentaryFlow, {
+    delivery: {
+      over: params.over,
+      ball: params.ball,
+      runs: params.runs,
+      extras: params.extras > 0 ? `${params.extras} extras` : null, // simplified 
+      isWicket: params.isWicket,
+      wicketType: params.wicketType ?? null,
+      batsmanName: params.batsmanName,
+      bowlerName: params.bowlerName,
+      wagWheelZone: params.shotZone ?? 'unknown',
+    },
+    matchContext: {
+      score: params.score,
+      target: params.target ?? null,
+      runRate: params.currentRunRate,
+      requiredRate: params.requiredRunRate ?? null,
+      partnership: params.partnership,
+      batsmanStats: params.batsmanStats,
+    }
   });
 
-  // Step 2: Run momentum re-analysis with current over data
+  // Step 2: Run momentum re-analysis with last 5 overs
   const momentumResult = await runFlow(momentumAnalysisFlow, {
-    matchId: params.matchId,
-    battingTeam: params.battingTeam,
-    bowlingTeam: params.bowlerTeam,
-    format: params.format,
-    innings: params.innings,
-    overByOverRuns: params.overByOverRuns,
-    currentMomentum: params.momentum,
+    last5Overs: params.overByOverRuns.slice(-5),
+    currentScore: params.score,
+    target: params.target ?? null,
+    teamBatting: params.battingTeam,
+    teamBowling: params.bowlerTeam,
   });
 
   return {
-    commentary,
+    commentary: flowOutput.commentary,
     newMomentumScore: momentumResult.momentumScore,
   };
 }

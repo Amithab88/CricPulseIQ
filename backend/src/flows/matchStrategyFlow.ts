@@ -1,95 +1,125 @@
-/**
- * matchStrategyFlow.ts
- * Uses: defineFlow, generate, structuredOutput (output: { schema }), definePrompt
- * Model: gemini15Pro for structured tactical output
- */
-
 import { defineFlow, generate } from '@genkit-ai/core';
 import { gemini15Pro } from '@genkit-ai/vertexai';
 import * as z from 'zod';
-import { SYSTEM_INSTRUCTION } from '../prompts/prompts';
 
-const StrategyOutputSchema = z.object({
-  battingPlan: z.string(),
-  bowlingPlan: z.string(),
-  keyMatchups: z.array(z.string()),
-  fieldingNotes: z.string().optional(),
+const PlayerSchema = z.object({
+  name: z.string(),
+  role: z.string(),
+  battingAvg: z.number(),
+  bowlingEcon: z.number().nullable(),
+  recentForm: z.string(),
+  weaknesses: z.array(z.string()),
 });
+
+const OpponentPlayerSchema = z.object({
+  name: z.string(),
+  threat: z.enum(["high", "medium", "low"]),
+  howToNeutralise: z.string(),
+});
+
+const MatchStrategyInput = z.object({
+  ourTeam: z.object({
+    name: z.string(),
+    players: z.array(PlayerSchema),
+    recentResults: z.array(z.string()),
+  }),
+  opponent: z.object({
+    name: z.string(),
+    knownStrengths: z.array(z.string()),
+    knownWeaknesses: z.array(z.string()),
+    keyPlayers: z.array(OpponentPlayerSchema),
+  }),
+  matchFormat: z.enum(["T20", "ODI", "40-over"]),
+  venue: z.string(),
+  pitchReport: z.string().nullable(),
+  tossResult: z.object({
+    wonToss: z.boolean(),
+    decision: z.enum(["bat", "bowl"]),
+  }).nullable(),
+});
+
+const MatchStrategyOutput = z.object({
+  battingOrder: z.array(z.object({
+    position: z.number(),
+    name: z.string(),
+    reason: z.string(),
+  })),
+  powerplayStrategy: z.object({
+    batting: z.string(),
+    bowling: z.string(),
+    openingBowlers: z.array(z.string()),
+  }),
+  middleOversPlan: z.string(),
+  deathOversTactics: z.object({
+    batting: z.string(),
+    bowling: z.string(),
+    closingBowler: z.string(),
+  }),
+  bowlingRotations: z.array(z.object({
+    over: z.string(),
+    bowler: z.string(),
+    plan: z.string(),
+  })),
+  fieldPlacementPhilosophy: z.string(),
+  riskWarnings: z.array(z.object({
+    scenario: z.string(),
+    response: z.string(),
+  })),
+  captainSummary: z.string(),
+});
+
+const SYSTEM_PROMPT = `You are a professional cricket strategist preparing a detailed pre-match plan for a grassroots club. You think like a franchise T20 coach but communicate in clear, practical language a club cricketer can execute. Every recommendation must name specific players by name.`;
 
 export const matchStrategyFlow = defineFlow(
   {
     name: 'matchStrategyFlow',
-    inputSchema: z.object({
-      ownTeamName: z.string(),
-      ownPlayers: z.array(z.object({
-        name: z.string(),
-        role: z.string(),
-        recentForm: z.string(),
-      })),
-      opponentTeamName: z.string(),
-      opponentPlayers: z.array(z.object({
-        name: z.string(),
-        role: z.string(),
-        vsSpinRating: z.number().optional(),
-        vsPaceRating: z.number().optional(),
-        weakZones: z.array(z.string()).optional(),
-      })),
-      venue: z.string(),
-      pitchConditions: z.string(),
-      weather: z.string(),
-      format: z.enum(['T20', 'ODI', 'Test']),
-      tossDecision: z.enum(['bat', 'bowl']).optional(),
-    }),
-    outputSchema: StrategyOutputSchema,
+    inputSchema: MatchStrategyInput,
+    outputSchema: MatchStrategyOutput,
   },
   async (input) => {
-    const ownTeamSummary = input.ownPlayers
-      .map(p => `- ${p.name} (${p.role}): Form — ${p.recentForm}`)
-      .join('\n');
+    const { ourTeam, opponent, matchFormat, venue, pitchReport, tossResult } = input;
 
-    const opponentSummary = input.opponentPlayers
-      .map(p => {
-        const ratings = [
-          p.vsPaceRating !== undefined ? `vs Pace ${p.vsPaceRating}/100` : null,
-          p.vsSpinRating !== undefined ? `vs Spin ${p.vsSpinRating}/100` : null,
-          p.weakZones?.length ? `Weak zones: ${p.weakZones.join(', ')}` : null,
-        ].filter(Boolean).join(', ');
-        return `- ${p.name} (${p.role}): ${ratings || 'No data'}`;
-      })
-      .join('\n');
+    const userPrompt = `Generate a complete pre-match strategy for ${ourTeam.name} vs ${opponent.name} in a ${matchFormat} match at ${venue}.
 
-    const tossLine = input.tossDecision ? `Toss decision: ${input.tossDecision}` : '';
+The plan must cover exactly these 7 sections:
+1. BATTING ORDER — Full recommended batting order (1-11) with rationale for the top 5 positions
+2. POWERPLAY STRATEGY — First 6 overs batting and bowling approach, specific bowler names for overs 1-3
+3. MIDDLE OVERS PLAN — Overs 7-15, rotation strategy, when to accelerate
+4. DEATH OVERS TACTICS — Final 5 overs batting (who hits, target zones) and bowling (who bowls, which balls to bowl)
+5. BOWLING ROTATIONS — Full bowling plan: who bowls which overs, backup options
+6. FIELD PLACEMENT PHILOSOPHY — General field setup for pace vs spin, plus special fields for their key threats
+7. RISK WARNINGS — 2-3 specific scenarios where our plan could fail and how to respond
+
+OUR TEAM DETAILS:
+${JSON.stringify(ourTeam, null, 2)}
+
+OPPONENT DETAILS:
+${JSON.stringify(opponent, null, 2)}
+
+PITCH REPORT: ${pitchReport || 'Standard grassroots pitch.'}
+TOSS: ${tossResult ? `${tossResult.wonToss ? 'Won' : 'Lost'} toss, decided to ${tossResult.decision}` : 'Toss not yet occurred.'}
+
+Return exactly as JSON matching the specified schema.`;
 
     const llmResponse = await generate({
       model: gemini15Pro,
-      prompt: `${SYSTEM_INSTRUCTION}
-
-TASK: Generate a targeted pre-match plan for ${input.ownTeamName} vs ${input.opponentTeamName}.
-
-Format: ${input.format} | Venue: ${input.venue}
-Pitch: ${input.pitchConditions}
-Weather: ${input.weather}
-${tossLine}
-
-OUR SQUAD:
-${ownTeamSummary}
-
-OPPONENT INTEL:
-${opponentSummary}
-
-Return JSON: "battingPlan" (player-specific batting tactics referencing opponent's best bowlers), "bowlingPlan" (bowler assignments targeting opponent weaknesses by name), "keyMatchups" (array — each a direct 1v1 e.g. "Our leg-spinner Ravi vs their captain who rates 38/100 vs spin"), "fieldingNotes" (optional fielding adjustments from wagon wheel tendencies).`,
-      config: { temperature: 0.6 },
-      // structuredOutput: type-safe JSON output via output.schema
+      prompt: `${SYSTEM_PROMPT}\n\n${userPrompt}`,
+      config: { temperature: 0.7 },
       output: {
         format: 'json',
-        schema: StrategyOutputSchema,
+        schema: MatchStrategyOutput,
       },
     });
 
     return llmResponse.output() ?? {
-      battingPlan: 'Insufficient data for a full plan.',
-      bowlingPlan: 'Insufficient data for a full plan.',
-      keyMatchups: [],
+      battingOrder: [],
+      powerplayStrategy: { batting: "N/A", bowling: "N/A", openingBowlers: [] },
+      middleOversPlan: "N/A",
+      deathOversTactics: { batting: "N/A", bowling: "N/A", closingBowler: "N/A" },
+      bowlingRotations: [],
+      fieldPlacementPhilosophy: "N/A",
+      riskWarnings: [],
+      captainSummary: "Insufficient data to generate a full match plan.",
     };
   }
 );

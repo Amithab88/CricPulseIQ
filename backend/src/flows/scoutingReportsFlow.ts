@@ -1,101 +1,96 @@
-/**
- * scoutingReportsFlow.ts
- * Uses: defineFlow, generate, structuredOutput (output: { schema }), definePrompt
- * Model: gemini15Pro — high-quality structured scouting analysis
- */
-
 import { defineFlow, generate } from '@genkit-ai/core';
 import { gemini15Pro } from '@genkit-ai/vertexai';
 import * as z from 'zod';
-import { buildPlayerContext } from '../prompts/systemPrompt';
-import { SYSTEM_INSTRUCTION } from '../prompts/prompts';
 
-const ScoutingOutputSchema = z.object({
-  summary: z.string(),
-  strengths: z.array(z.string()),
-  weaknesses: z.array(z.string()),
-  bowlingLineLength: z.string(),
-  fieldingConfiguration: z.string(),
-  riskRating: z.enum(['Low', 'Medium', 'High', 'Danger']),
+const ScoringStats = z.object({
+  matches: z.number(),
+  runs: z.number(),
+  avg: z.number(),
+  strikeRate: z.number(),
+  highScore: z.number(),
+  fifties: z.number(),
+  hundreds: z.number(),
+  vsSpinAvg: z.number(),
+  vsSpinSR: z.number(),
+  vsPaceAvg: z.number(),
+  vsPaceSR: z.number(),
+  powerplayRating: z.number(),
+  middleOversRating: z.number(),
+  deathOversRating: z.number(),
+  dotBallPct: z.number(),
+  boundaryPct: z.number(),
 });
 
-export const scoutingReportsFlow = defineFlow(
+const ScoutingReportInput = z.object({
+  player: z.object({
+    name: z.string(),
+    age: z.number(),
+    battingStyle: z.string(),
+    bowlingStyle: z.string(),
+    seasonStats: ScoringStats,
+    shotZones: z.record(z.string(), z.object({ shots: z.number(), runs: z.number() })),
+    formTrend: z.enum(["improving", "declining", "consistent"]),
+    last5Scores: z.array(z.number()),
+    careerHighlight: z.string(),
+  }),
+});
+
+const ScoutingReportOutput = z.object({
+  paragraph1_profile: z.string(),
+  paragraph2_weaknesses: z.string(),
+  paragraph3_strategy: z.string(),
+  scoutingVerdict: z.enum(["avoid", "monitor", "recruit", "prioritise"]),
+  keyBowlingTactic: z.string(),
+});
+
+const SYSTEM_PROMPT = `You are a professional cricket scout writing reports for a county cricket academy. Your reports are used by coaches to make selection and game-planning decisions. You are analytical, specific, and direct. You do not write generic observations — every sentence must reference specific statistics or observable patterns.`;
+
+export const scoutingReportFlow = defineFlow(
   {
-    name: 'scoutingReportsFlow',
-    inputSchema: z.object({
-      playerName: z.string(),
-      role: z.string(),
-      recentForm: z.string(),
-      careerStats: z.object({
-        matches: z.number(),
-        runs: z.number(),
-        avg: z.number(),
-        strikeRate: z.number(),
-        highScore: z.number(),
-        fifties: z.number(),
-        hundreds: z.number(),
-      }),
-      phaseRatings: z.object({
-        powerplay: z.number(),
-        middleOvers: z.number(),
-        death: z.number(),
-      }),
-      vsSpinRating: z.number(),
-      vsPaceRating: z.number(),
-      shotZones: z.record(z.string(), z.number()),
-    }),
-    outputSchema: ScoutingOutputSchema,
+    name: 'scoutingReportFlow',
+    inputSchema: ScoutingReportInput,
+    outputSchema: ScoutingReportOutput,
   },
   async (input) => {
-    const playerCtx = buildPlayerContext({
-      playerName: input.playerName,
-      role: input.role,
-      recentForm: input.recentForm,
-      vsSpinRating: input.vsSpinRating,
-      vsPaceRating: input.vsPaceRating,
-      phaseRatings: input.phaseRatings,
-    });
+    const { player } = input;
+    const s = player.seasonStats;
 
-    const careerStr = `Career: ${input.careerStats.matches} matches, ${input.careerStats.runs} runs, avg ${input.careerStats.avg}, SR ${input.careerStats.strikeRate}, HS ${input.careerStats.highScore}, ${input.careerStats.fifties} fifties, ${input.careerStats.hundreds} hundreds`;
-
-    const shotZoneStr = Object.entries(input.shotZones)
-      .sort(([, a], [, b]) => b - a)
-      .map(([zone, pct]) => `${zone}: ${pct}%`)
+    const topZones = Object.entries(player.shotZones)
+      .sort(([, a], [, b]) => b.runs - a.runs)
+      .slice(0, 3)
+      .map(([zone, data]) => `${zone} (${data.runs} runs)`)
       .join(', ');
+
+    const userPrompt = `Write a professional three-paragraph scouting report on ${player.name} (${player.battingStyle} bat, ${player.bowlingStyle}).
+
+Season stats: Avg ${s.avg}, SR ${s.strikeRate}, HS ${s.highScore}, ${s.fifties} fifties, ${s.hundreds} hundreds.
+vs Spin: Avg ${s.vsSpinAvg}, SR ${s.vsSpinSR} | vs Pace: Avg ${s.vsPaceAvg}, SR ${s.vsPaceSR}
+Phase ratings (0-10): Powerplay ${s.powerplayRating}, Middle overs ${s.middleOversRating}, Death ${s.deathOversRating}
+Shot zone dominance: ${topZones}
+Form trend: ${player.formTrend}. Last 5 scores: ${player.last5Scores.join(', ')}
+
+Paragraph 1: Overall profile and batting identity — what kind of batter is this player?
+Paragraph 2: Specific weaknesses — reference exact stats, name specific delivery types and field placements to exploit
+Paragraph 3: Strategic value — when and how a captain should use this player, and one thing they could do to improve their rating by a full tier
+
+Return exactly as JSON matching the specified schema.`;
 
     const llmResponse = await generate({
       model: gemini15Pro,
-      prompt: `${SYSTEM_INSTRUCTION}
-
-TASK: Generate a detailed opposition scouting report. Coaches will use this in a team meeting. Be direct.
-
-PLAYER PROFILE:
-${playerCtx}
-${careerStr}
-Shot Zones (wagon wheel): ${shotZoneStr}
-
-Return JSON:
-- "summary": 2-3 sentences stating this player's biggest asset and primary weakness. No hedging.
-- "strengths": Array of up to 3 specific strengths with stat references.
-- "weaknesses": Array of up to 3 specific exploitable weaknesses with stat references.
-- "bowlingLineLength": Exact recommended plan — hand, pace type, line, length.
-- "fieldingConfiguration": Key fielder positions from their hot zones.
-- "riskRating": "Low" | "Medium" | "High" | "Danger".`,
-      config: { temperature: 0.55 },
-      // structuredOutput via output.schema
+      prompt: `${SYSTEM_PROMPT}\n\n${userPrompt}`,
+      config: { temperature: 0.65 },
       output: {
         format: 'json',
-        schema: ScoutingOutputSchema,
+        schema: ScoutingReportOutput,
       },
     });
 
     return llmResponse.output() ?? {
-      summary: 'Insufficient data for a full scouting report.',
-      strengths: [],
-      weaknesses: [],
-      bowlingLineLength: 'N/A',
-      fieldingConfiguration: 'N/A',
-      riskRating: 'Medium' as const,
+      paragraph1_profile: "Insufficient data.",
+      paragraph2_weaknesses: "Insufficient data.",
+      paragraph3_strategy: "Insufficient data.",
+      scoutingVerdict: "monitor",
+      keyBowlingTactic: "Unknown.",
     };
   }
 );

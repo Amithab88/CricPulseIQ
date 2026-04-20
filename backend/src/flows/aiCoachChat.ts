@@ -1,144 +1,89 @@
-/**
- * aiCoachChat.ts
- * Uses: defineFlow, streamingGenerate, definePrompt, structuredOutput
- * Model: gemini15Pro for nuanced multi-turn coaching conversation
- */
-
-import { defineFlow, streamingGenerate } from '@genkit-ai/core';
+import { defineFlow, generate } from '@genkit-ai/core';
 import { gemini15Pro } from '@genkit-ai/vertexai';
 import * as z from 'zod';
-import { buildPlayerContext } from '../prompts/systemPrompt';
-import { SYSTEM_INSTRUCTION } from '../prompts/prompts';
 
-const ChatMessageSchema = z.object({
-  role: z.enum(['user', 'coach']),
+const CoachMessage = z.object({
+  role: z.enum(['user', 'model']),
   content: z.string(),
 });
 
-const CoachOutputSchema = z.object({
-  coachReply: z.string(),
-  suggestedFollowUps: z.array(z.string()),
+const AICoachInput = z.object({
+  messages: z.array(CoachMessage),
+  teamContext: z.object({
+    clubName: z.string(),
+    upcomingOpponent: z.string().nullable(),
+    recentForm: z.string(),
+    squad: z.array(z.object({
+      name: z.string(),
+      role: z.string(),
+      battingAvg: z.number(),
+      bowlingEcon: z.number().nullable(),
+      weaknesses: z.array(z.string()),
+      strengths: z.array(z.string()),
+    })),
+    liveMatchState: z.object({
+      score: z.string(),
+      over: z.string(),
+      runRate: z.number(),
+      target: z.number().nullable(),
+    }).nullable(),
+  }),
+});
+
+const AICoachOutput = z.object({
+  reply: z.string(),
+  suggestedChips: z.array(z.string()),
 });
 
 export const aiCoachChatFlow = defineFlow(
   {
     name: 'aiCoachChatFlow',
-    inputSchema: z.object({
-      playerName: z.string(),
-      role: z.string(),
-      recentForm: z.string(),
-      vsSpinRating: z.number().optional(),
-      vsPaceRating: z.number().optional(),
-      phaseRatings: z.object({
-        powerplay: z.number().optional(),
-        middleOvers: z.number().optional(),
-        death: z.number().optional(),
-      }).optional(),
-      shotZones: z.record(z.string(), z.number()).optional(),
-      chatHistory: z.array(ChatMessageSchema),
-      userMessage: z.string(),
-      // Stream the coach reply token by token
-      streaming: z.boolean().default(false),
-    }),
-    outputSchema: CoachOutputSchema,
+    inputSchema: AICoachInput,
+    outputSchema: AICoachOutput,
   },
-  async (input, streamingCallback) => {
-    const playerCtx = buildPlayerContext({
-      playerName: input.playerName,
-      role: input.role,
-      recentForm: input.recentForm,
-      vsSpinRating: input.vsSpinRating,
-      vsPaceRating: input.vsPaceRating,
-      phaseRatings: input.phaseRatings,
-    });
+  async (input) => {
+    const { messages, teamContext: ctx } = input;
 
-    const shotZoneStr = input.shotZones
-      ? Object.entries(input.shotZones)
-          .sort(([, a], [, b]) => b - a)
-          .map(([zone, pct]) => `${zone}: ${pct}%`)
-          .join(', ')
-      : 'Not available.';
+    const squadStr = JSON.stringify(ctx.squad, null, 2);
+    const liveMatchStr = ctx.liveMatchState ? `LIVE MATCH IN PROGRESS: ${JSON.stringify(ctx.liveMatchState)}` : '';
 
-    const historyStr = input.chatHistory.length > 0
-      ? input.chatHistory.map(m => `${m.role === 'user' ? input.playerName : 'Coach'}: ${m.content}`).join('\n')
-      : '[Start of conversation]';
+    const systemPrompt = `You are the AI coaching assistant for ${ctx.clubName}. You have deep knowledge of every player in the squad, their statistics, their weaknesses, and their recent form.
 
-    // For streaming: push plain text reply tokens to UI, then resolve structured output
-    if (input.streaming && streamingCallback) {
-      const streamPrompt = `${SYSTEM_INSTRUCTION}
+Squad details:
+${squadStr}
 
-You are this player's personal AI coach. Answer grounded in their specific data. Reference actual numbers. Keep replies under 4 sentences.
+Recent team form: ${ctx.recentForm}
+${liveMatchStr}
 
-PLAYER PROFILE:
-${playerCtx}
-Shot Zones: ${shotZoneStr}
+You are a tactical, data-driven coach who speaks plainly. You never give generic cricket advice — every recommendation references specific players by name and specific numbers. You are concise (max 4 sentences per reply unless asked to elaborate). You understand grassroots club cricket — limited resources, amateur players, community stakes.
 
-CONVERSATION:
-${historyStr}
-${input.playerName}: ${input.userMessage}
-Coach:`;
+If asked about live match decisions, use the live match state above. If asked about selection or strategy, use the squad data.
 
-      let streamedReply = '';
-      const { response } = await streamingGenerate({
-        model: gemini15Pro,
-        prompt: streamPrompt,
-        config: { temperature: 0.72, maxOutputTokens: 300 },
-      });
+Return your response as a JSON object with:
+- "reply": Your coaching response (concise, data-driven).
+- "suggestedChips": Exactly 3 relevant follow-up questions/actions (e.g. "Who should open?", "Bowling at death?").`;
 
-      for await (const chunk of response) {
-        const text = chunk.text();
-        streamedReply += text;
-        streamingCallback(text); // stream tokens to frontend
-      }
+    // Extract the latest user message and the history
+    const history = messages.slice(0, -1).map(m => ({
+      role: m.role,
+      content: [{ text: m.content }]
+    }));
+    const userMsg = messages[messages.length - 1].content;
 
-      // Second pass: get structured follow-ups from the streamed reply
-      const { response: followUpResp } = await streamingGenerate({
-        model: gemini15Pro,
-        prompt: `Given this coaching reply: "${streamedReply.trim()}"
-Generate exactly 3 natural follow-up questions the player would logically ask next.
-Return as JSON array of strings only. No preamble.`,
-        config: { temperature: 0.6 },
-        output: { format: 'json', schema: z.array(z.string()) },
-      });
-
-      let followUpText = '';
-      for await (const chunk of followUpResp) followUpText += chunk.text();
-
-      let suggestedFollowUps: string[] = [];
-      try { suggestedFollowUps = JSON.parse(followUpText); } catch { /* graceful degradation */ }
-
-      return { coachReply: streamedReply.trim(), suggestedFollowUps };
-    }
-
-    // ── Non-streaming: single structured output call ───────────────────────────
-    const fullPrompt = `${SYSTEM_INSTRUCTION}
-
-You are this player's personal AI coach. Answer grounded in their specific data. Reference actual numbers. Keep replies under 4 sentences.
-
-PLAYER PROFILE:
-${playerCtx}
-Shot Zones: ${shotZoneStr}
-
-CONVERSATION:
-${historyStr}
-${input.playerName}: ${input.userMessage}
-
-Return JSON with "coachReply" (string, max 4 sentences) and "suggestedFollowUps" (array of 2-3 follow-up questions).`;
-
-    const { response } = await streamingGenerate({
+    const llmResponse = await generate({
       model: gemini15Pro,
-      prompt: fullPrompt,
-      config: { temperature: 0.72, maxOutputTokens: 400 },
-      output: { format: 'json', schema: CoachOutputSchema },
+      history: history,
+      prompt: `${systemPrompt}\n\nUser: ${userMsg}`,
+      config: { temperature: 0.7 },
+      output: {
+        format: 'json',
+        schema: AICoachOutput,
+      },
     });
 
-    let text = '';
-    for await (const chunk of response) text += chunk.text();
-
-    try {
-      return JSON.parse(text) as z.infer<typeof CoachOutputSchema>;
-    } catch {
-      return { coachReply: text.trim(), suggestedFollowUps: [] };
-    }
+    return llmResponse.output() ?? {
+      reply: "I'm processing the team data, coach. What's on your mind?",
+      suggestedChips: ["Who should open the batting?", "Best death bowler?", "Team talk strategy"],
+    };
   }
 );
