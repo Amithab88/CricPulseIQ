@@ -1,4 +1,5 @@
-import { defineFlow, generate } from '@genkit-ai/core';
+import { defineFlow } from '@genkit-ai/core';
+import { generate } from '@genkit-ai/ai';
 import { gemini15Flash } from '@genkit-ai/vertexai';
 import * as z from 'zod';
 
@@ -38,7 +39,7 @@ const FieldPlacementOutput = z.object({
     moveFrom: z.string(),
     moveTo: z.string(),
     reason: z.string(),
-  })),
+  })).min(1).max(3),
   bowlingLineAdjustment: z.string(),
   primaryWeakness: z.string(),
   confidenceLevel: z.enum(["high", "medium", "low"]),

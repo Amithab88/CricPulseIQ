@@ -1,3 +1,9 @@
+/**
+ * index.ts
+ * Entry point for Genkit. Configures the environment and exports flows.
+ * Discoverable by Genkit Dev UI.
+ */
+
 import { configureGenkit } from '@genkit-ai/core';
 import { vertexAI } from '@genkit-ai/vertexai';
 import { firebase } from '@genkit-ai/firebase';
@@ -15,7 +21,7 @@ configureGenkit({
   enableTracingAndMetrics: true,
 });
 
-// ─── Genkit Flows (discoverable by Genkit Dev UI and Cloud Run) ───────────────
+// ─── Genkit Flows (discoverable by Genkit Dev UI) ──────────────────────────────
 export { onboardingWelcomeFlow } from './flows/onboardingWelcome';
 export { liveCommentaryFlow } from './flows/liveCommentary';
 export { momentumAnalysisFlow } from './flows/momentumAnalysis';
@@ -26,20 +32,9 @@ export { matchStrategyFlow } from './flows/matchStrategyFlow';
 export { scoutingReportFlow } from './flows/scoutingReportsFlow';
 export { teamOfTournamentFlow } from './flows/teamOfTournament';
 export { qualificationScenariosFlow } from './flows/qualificationScenarios';
+import { initializeApp, getApps } from 'firebase-admin/app';
 
-// ─── Cloud Functions v2 (deployed via firebase deploy --only functions) ───────
-export { onDeliveryCreated, onMatchCompleted, generateScoutingReport } from './functions/matchPipeline';
-
-// ─── HTTP Flow Endpoints (onFlow — Cloud Run / Functions HTTP) ────────────────
-export {
-  httpLiveCommentary,
-  httpAiCoachChat,
-  httpMatchStrategy,
-  httpScoutingReport,
-  httpMomentumAnalysis,
-  httpPlayerWeakness,
-  httpFieldPlacement,
-  httpOnboardingWelcome,
-  httpTeamOfTournament,
-  httpQualificationScenarios,
-} from './functions/httpHandler';
+// Initialize Firebase Admin if not already initialized
+if (getApps().length === 0) {
+  initializeApp();
+}

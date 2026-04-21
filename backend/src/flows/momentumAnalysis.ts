@@ -1,6 +1,9 @@
-import { defineFlow, generate } from '@genkit-ai/core';
+import { defineFlow } from '@genkit-ai/core';
+import { generate } from '@genkit-ai/ai';
 import { gemini15Flash } from '@genkit-ai/vertexai';
 import * as z from 'zod';
+
+const SYSTEM_PROMPT = `You are a tactical cricket analyst specialising in momentum and phase analysis for club cricket. You think in data — runs-per-over, wicket clusters, dot-ball pressure. You speak like a coach, not a commentator. Every instruction is specific and actionable.`;
 
 const MomentumAnalysisInput = z.object({
   last5Overs: z.array(z.object({
@@ -52,7 +55,7 @@ Return exactly as JSON matching the specified schema.`;
 
     const llmResponse = await generate({
       model: gemini15Flash,
-      prompt: userPrompt,
+      prompt: `${SYSTEM_PROMPT}\n\n${userPrompt}`,
       config: { temperature: 0.5 },
       output: {
         format: 'json',

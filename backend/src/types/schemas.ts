@@ -5,7 +5,7 @@ export const ClubSchema = z.object({
   id: z.string(),
   name: z.string(),
   city: z.string(),
-  logoUrl: z.string().url(),
+  logoUrl: z.string().min(1),
   createdAt: z.string().datetime(),
 });
 export type Club = z.infer<typeof ClubSchema>;
@@ -22,7 +22,7 @@ export const PlayerSchema = z.object({
   battingStyle: z.string(),
   bowlingStyle: z.string().optional(),
   jerseyNo: z.number().int().min(1).max(99),
-  photoUrl: z.string().url().optional(),
+  photoUrl: z.string().min(1).optional(),
 });
 export type Player = z.infer<typeof PlayerSchema>;
 
@@ -80,7 +80,9 @@ export const DeliverySchema = z.object({
   over: z.number().int().min(0),
   ball: z.number().int().min(1).max(8),
   batsmanId: z.string(),
+  batsmanTeamId: z.string(),
   bowlerId: z.string(),
+  bowlerTeamId: z.string(),
   runs: z.number().int().min(0),
   extras: z.number().int().min(0).default(0),
   extraType: ExtraTypeSchema,
@@ -96,16 +98,22 @@ export const DeliverySchema = z.object({
 export type Delivery = z.infer<typeof DeliverySchema>;
 
 // ─── PlayerStats ─────────────────────────────────────────────────────────────
+export const ShotZoneDataSchema = z.object({
+  shots: z.number().int().min(0),
+  runs: z.number().int().min(0),
+  boundaries: z.number().int().min(0),
+});
+
 export const ShotZonesSchema = z.object({
-  fineLeg: z.number().min(0).max(100),
-  squareLeg: z.number().min(0).max(100),
-  midWicket: z.number().min(0).max(100),
-  midOn: z.number().min(0).max(100),
-  straight: z.number().min(0).max(100),
-  midOff: z.number().min(0).max(100),
-  cover: z.number().min(0).max(100),
-  point: z.number().min(0).max(100),
-  thirdMan: z.number().min(0).max(100),
+  fineLeg: ShotZoneDataSchema,
+  squareLeg: ShotZoneDataSchema,
+  midWicket: ShotZoneDataSchema,
+  midOn: ShotZoneDataSchema,
+  straight: ShotZoneDataSchema,
+  midOff: ShotZoneDataSchema,
+  cover: ShotZoneDataSchema,
+  point: ShotZoneDataSchema,
+  thirdMan: ShotZoneDataSchema,
 });
 export type ShotZones = z.infer<typeof ShotZonesSchema>;
 
@@ -137,6 +145,8 @@ export const PlayerSeasonStatsSchema = z.object({
   hundreds: z.number().int(),
   // Bowling
   wickets: z.number().int().default(0),
+  oversBowled: z.number().optional(),
+  runsConceded: z.number().int().optional(),
   bowlingAvg: z.number().optional(),
   economy: z.number().optional(),
   // AI feature ratings

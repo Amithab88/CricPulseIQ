@@ -1,8 +1,8 @@
 import { defineFlow } from '@genkit-ai/core';
+import { generate } from '@genkit-ai/ai';
 import { gemini15Pro } from '@genkit-ai/vertexai';
-import { generate } from '@genkit-ai/core';
 import * as z from 'zod';
-import { CRICPULSEIQ_SYSTEM_PROMPT } from '../prompts/systemPrompt';
+import { SYSTEM_INSTRUCTION } from '../prompts/prompts';
 
 export const teamOfTournamentFlow = defineFlow(
   {
@@ -47,7 +47,7 @@ export const teamOfTournamentFlow = defineFlow(
       })
       .join('\n');
 
-    const prompt = `${CRICPULSEIQ_SYSTEM_PROMPT}
+    const prompt = `${SYSTEM_INSTRUCTION}
 
 TASK: Select the Team of the Tournament for ${input.tournamentName} (${input.format}). Pick exactly 11 players.
 
@@ -69,21 +69,8 @@ Return JSON:
       model: gemini15Pro,
       prompt,
       config: { temperature: 0.5 },
-      output: {
-        format: 'json',
-        schema: z.object({
-          teamOf11: z.array(z.object({
-            playerId: z.string(),
-            name: z.string(),
-            teamName: z.string(),
-            role: z.string(),
-            selectionReason: z.string(),
-          })),
-          captain: z.string(),
-          mvp: z.string(),
-          tournamentNarrative: z.string(),
-        }),
-      },
+      // Schema validation handled by defineFlow's outputSchema — no duplicate inline schema
+      output: { format: 'json' },
     });
 
     return response.output() ?? {

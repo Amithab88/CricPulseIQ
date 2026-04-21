@@ -1,4 +1,5 @@
-import { defineFlow, generate } from '@genkit-ai/core';
+import { defineFlow } from '@genkit-ai/core';
+import { generate } from '@genkit-ai/ai';
 import { gemini15Pro } from '@genkit-ai/vertexai';
 import * as z from 'zod';
 
@@ -72,8 +73,9 @@ Return your response as a JSON object with:
 
     const llmResponse = await generate({
       model: gemini15Pro,
+      system: systemPrompt,   // ← system prompt in dedicated field, not concatenated into user turn
       history: history,
-      prompt: `${systemPrompt}\n\nUser: ${userMsg}`,
+      prompt: userMsg,         // ← user message only
       config: { temperature: 0.7 },
       output: {
         format: 'json',

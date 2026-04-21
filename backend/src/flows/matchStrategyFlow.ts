@@ -1,4 +1,5 @@
-import { defineFlow, generate } from '@genkit-ai/core';
+import { defineFlow } from '@genkit-ai/core';
+import { generate } from '@genkit-ai/ai';
 import { gemini15Pro } from '@genkit-ai/vertexai';
 import * as z from 'zod';
 
@@ -79,6 +80,15 @@ export const matchStrategyFlow = defineFlow(
   async (input) => {
     const { ourTeam, opponent, matchFormat, venue, pitchReport, tossResult } = input;
 
+    // Trim payload — only send fields the prompt actually uses to avoid token overflow
+    const squadSummary = ourTeam.players
+      .map(p => `${p.name} (${p.role}) — Avg:${p.battingAvg} Econ:${p.bowlingEcon ?? 'N/A'} Form:${p.recentForm} Weaknesses:${p.weaknesses.join(', ')}`)
+      .join('\n');
+
+    const opponentThreatSummary = opponent.keyPlayers
+      .map(p => `${p.name} [${p.threat.toUpperCase()} threat] — ${p.howToNeutralise}`)
+      .join('\n');
+
     const userPrompt = `Generate a complete pre-match strategy for ${ourTeam.name} vs ${opponent.name} in a ${matchFormat} match at ${venue}.
 
 The plan must cover exactly these 7 sections:
@@ -90,11 +100,15 @@ The plan must cover exactly these 7 sections:
 6. FIELD PLACEMENT PHILOSOPHY — General field setup for pace vs spin, plus special fields for their key threats
 7. RISK WARNINGS — 2-3 specific scenarios where our plan could fail and how to respond
 
-OUR TEAM DETAILS:
-${JSON.stringify(ourTeam, null, 2)}
+OUR SQUAD (${ourTeam.name}):
+${squadSummary}
+Recent results: ${ourTeam.recentResults.join(', ')}
 
-OPPONENT DETAILS:
-${JSON.stringify(opponent, null, 2)}
+OPPONENT (${opponent.name}):
+Strengths: ${opponent.knownStrengths.join(', ')}
+Weaknesses: ${opponent.knownWeaknesses.join(', ')}
+Key threats:
+${opponentThreatSummary}
 
 PITCH REPORT: ${pitchReport || 'Standard grassroots pitch.'}
 TOSS: ${tossResult ? `${tossResult.wonToss ? 'Won' : 'Lost'} toss, decided to ${tossResult.decision}` : 'Toss not yet occurred.'}

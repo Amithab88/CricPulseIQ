@@ -58,7 +58,7 @@ export default function LiveScorecardScreen() {
     <ScrollView style={styles.root} contentContainerStyle={{ paddingBottom: 32 }}>
       {/* Match header */}
       <View style={styles.matchHeader}>
-        <Text style={styles.teams}>{match?.homeTeam ?? '—'} vs {match?.awayTeam ?? '—'}</Text>
+        <Text style={styles.teams}>{match?.homeTeamId ?? '—'} vs {match?.awayTeamId ?? '—'}</Text>
         <View style={[styles.statusPill, match?.status === 'live' ?? false ? styles.statusLive : styles.statusOther]}>
           <Text style={styles.statusText}>{(match?.status ?? 'unknown').toUpperCase()}</Text>
         </View>

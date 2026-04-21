@@ -49,9 +49,10 @@ export const onDeliveryCreated = onDocumentCreated(
       const isLegalBall = !['wide', 'no-ball'].includes(delivery.extraType ?? '');
       const newRuns = current.runs + delivery.runs + delivery.extras;
       const newWickets = current.wickets + (delivery.isWicket ? 1 : 0);
-      const newOvers = isLegalBall
-        ? parseFloat((current.overs + 1 / 6).toFixed(1))
-        : current.overs;
+      // Avoid floating-point drift: work in integer ball space, format as cricket overs (X.Y)
+      const currentBalls = Math.round(current.overs * 6);
+      const newBalls = currentBalls + (isLegalBall ? 1 : 0);
+      const newOvers = parseFloat(`${Math.floor(newBalls / 6)}.${newBalls % 6}`);
 
       tx.update(matchRef, {
         [`${inningsKey}.runs`]: newRuns,
@@ -112,6 +113,15 @@ export const onDeliveryCreated = onDocumentCreated(
       .map(([over, data]) => ({ over, ...data }))
       .sort((a, b) => a.over - b.over);
 
+    // ── Resolve player display names before AI call ─────────────────────────
+    // Passing raw Firestore IDs (e.g. "uid_xk29a") would produce broken commentary.
+    const [batsmanSnap, bowlerSnap] = await Promise.all([
+      db.collection('players').doc(delivery.batsmanId).get(),
+      db.collection('players').doc(delivery.bowlerId).get(),
+    ]);
+    const batsmanName = batsmanSnap.data()?.name ?? delivery.batsmanId;
+    const bowlerName = bowlerSnap.data()?.name ?? delivery.bowlerId;
+
     // ── Step C: Chain runFlow() — commentary + momentum ────────────────────
     const matchSnap = await matchRef.get();
     const match = matchSnap.data()!;
@@ -130,8 +140,8 @@ export const onDeliveryCreated = onDocumentCreated(
         currentRunRate: match[inningsKey]?.overs > 0
           ? parseFloat(((match[inningsKey]?.runs ?? 0) / match[inningsKey]?.overs).toFixed(2))
           : 0,
-        batsmanName: delivery.batsmanId, 
-        bowlerName: delivery.bowlerId,
+        batsmanName,   // resolved from /players collection
+        bowlerName,
         runs: delivery.runs,
         extras: delivery.extras,
         isWicket: delivery.isWicket,
@@ -211,16 +221,17 @@ export const onMatchCompleted = onDocumentUpdated(
       const ballsFaced = legalBalls.length;
       const isDismissed = balls.some(b => b.isWicket);
 
-      const zoneRuns: Record<string, number> = {};
+      const matchZoneData: Record<string, { shots: number, runs: number, boundaries: number }> = {};
       for (const b of legalBalls) {
         if (b.wagWheelZone) {
-          zoneRuns[b.wagWheelZone] = (zoneRuns[b.wagWheelZone] ?? 0) + (b.wagWheelRuns ?? b.runs);
+          const z = b.wagWheelZone;
+          if (!matchZoneData[z]) matchZoneData[z] = { shots: 0, runs: 0, boundaries: 0 };
+          matchZoneData[z].shots += 1;
+          const r = b.wagWheelRuns ?? b.runs;
+          matchZoneData[z].runs += r;
+          if (r >= 4) matchZoneData[z].boundaries += 1;
         }
       }
-      const totalZone = Object.values(zoneRuns).reduce((a, b) => a + b, 0) || 1;
-      const shotZonePercentages = Object.fromEntries(
-        Object.entries(zoneRuns).map(([z, r]) => [z, Math.round((r / totalZone) * 100)])
-      );
 
       const statsRef = db.collection('playerStats').doc(playerId).collection('seasons').doc(seasonId);
       const snap = await statsRef.get();
@@ -231,6 +242,20 @@ export const onMatchCompleted = onDocumentUpdated(
       const newInnings = (existing.innings ?? 0) + 1;
       const newNotOuts = (existing.notOuts ?? 0) + (isDismissed ? 0 : 1);
       const dismissed = newInnings - newNotOuts;
+
+      const mergedShotZones: Record<string, any> = {};
+      const allZones = ['fineLeg', 'squareLeg', 'midWicket', 'midOn', 'straight', 'midOff', 'cover', 'point', 'thirdMan'];
+      const existingShotZones = existing.shotZones as any ?? {};
+      for (const z of allZones) {
+        const ez = existingShotZones[z];
+        const prev = (ez && typeof ez === 'object' && 'shots' in ez) ? ez : { shots: 0, runs: 0, boundaries: 0 };
+        const mz = matchZoneData[z] || { shots: 0, runs: 0, boundaries: 0 };
+        mergedShotZones[z] = {
+          shots: prev.shots + mz.shots,
+          runs: prev.runs + mz.runs,
+          boundaries: prev.boundaries + mz.boundaries,
+        };
+      }
 
       batch.set(statsRef, {
         playerId, seasonId,
@@ -243,7 +268,7 @@ export const onMatchCompleted = onDocumentUpdated(
         highScore: Math.max(existing.highScore ?? 0, runsScored),
         fifties: (existing.fifties ?? 0) + (runsScored >= 50 && runsScored < 100 ? 1 : 0),
         hundreds: (existing.hundreds ?? 0) + (runsScored >= 100 ? 1 : 0),
-        shotZones: { ...(existing.shotZones ?? {}), ...shotZonePercentages },
+        shotZones: mergedShotZones as any,
         formHistory: [
           ...(existing.formHistory ?? []).slice(-9),
           { matchId, runs: runsScored, balls: ballsFaced, result: isDismissed ? 'out' : 'not out', date: new Date().toISOString() },
@@ -264,14 +289,20 @@ export const onMatchCompleted = onDocumentUpdated(
       const existing = snap.exists ? (snap.data() as Partial<PlayerSeasonStats>) : {};
 
       const totalWickets = (existing.wickets ?? 0) + wicketsTaken;
-      const allRunsConceded = (existing.runs ?? 0) + runsConceded;
-      const totalOvers = (existing.innings ?? 0) + oversBowled;
+      // Use dedicated bowling accumulators — existing.innings is batting innings count,
+      // using it as the overs denominator corrupts economy for all-rounders.
+      const existingOversBowled = (existing as any).oversBowled ?? 0;
+      const existingRunsConceded = (existing as any).runsConceded ?? 0;
+      const newOversBowled = existingOversBowled + oversBowled;
+      const newRunsConceded = existingRunsConceded + runsConceded;
 
       batch.set(statsRef, {
         playerId, seasonId,
         wickets: totalWickets,
-        economy: totalOvers > 0 ? parseFloat((allRunsConceded / totalOvers).toFixed(2)) : 0,
-        bowlingAvg: totalWickets > 0 ? parseFloat((allRunsConceded / totalWickets).toFixed(2)) : null,
+        oversBowled: newOversBowled,
+        runsConceded: newRunsConceded,
+        economy: newOversBowled > 0 ? parseFloat((newRunsConceded / newOversBowled).toFixed(2)) : 0,
+        bowlingAvg: totalWickets > 0 ? parseFloat((newRunsConceded / totalWickets).toFixed(2)) : null,
         updatedAt: new Date().toISOString(),
       }, { merge: true });
     }
@@ -306,37 +337,52 @@ export const generateScoutingReport = onCall(
 
     const season = seasonId ?? new Date().getFullYear().toString();
 
-    // Fetch stats from Firestore
-    const statsSnap = await db
-      .collection('playerStats').doc(playerId)
-      .collection('seasons').doc(season)
-      .get();
+    // Fetch stats AND player profile in parallel
+    const [statsSnap, playerSnap] = await Promise.all([
+      db.collection('playerStats').doc(playerId).collection('seasons').doc(season).get(),
+      db.collection('players').doc(playerId).get(),
+    ]);
 
     if (!statsSnap.exists) {
       throw new HttpsError('not-found', `No stats found for player ${playerId} in season ${season}.`);
     }
 
     const stats = statsSnap.data() as PlayerSeasonStats;
+    const playerProfile = playerSnap.data();
 
-    // Use runFlow() to execute the scouting report flow
-    const { scoutingReportsFlow } = await import('../flows/scoutingReportsFlow');
-    const report = await runFlow(scoutingReportsFlow, {
-      playerName: playerId,
-      role: 'batsman',
-      recentForm: stats.formHistory.slice(-3).map(f => `${f.runs}(${f.balls})`).join(', '),
-      careerStats: {
-        matches: stats.matches,
-        runs: stats.runs,
-        avg: stats.avg,
-        strikeRate: stats.strikeRate,
-        highScore: stats.highScore,
-        fifties: stats.fifties,
-        hundreds: stats.hundreds,
+    // Reshape payload to match scoutingReportFlow's nested `player:` input schema.
+    // Previously called with a flat object — caused Zod validation failure on every call.
+    // Also fixed: export name is scoutingReportFlow (not scoutingReportsFlow).
+    const { scoutingReportFlow } = await import('../flows/scoutingReportsFlow');
+    const report = await runFlow(scoutingReportFlow, {
+      player: {
+        name: playerProfile?.name ?? playerId,
+        age: playerProfile?.age ?? 0,
+        battingStyle: playerProfile?.battingStyle ?? 'right-hand bat',
+        bowlingStyle: playerProfile?.bowlingStyle ?? 'none',
+        seasonStats: {
+          matches: stats.matches,
+          runs: stats.runs,
+          avg: stats.avg,
+          strikeRate: stats.strikeRate,
+          highScore: stats.highScore,
+          fifties: stats.fifties,
+          hundreds: stats.hundreds,
+          vsSpinAvg: stats.vsSpinRating,
+          vsSpinSR: 0,
+          vsPaceAvg: stats.vsPaceRating,
+          vsPaceSR: 0,
+          powerplayRating: stats.phaseRatings?.powerplay ?? 0,
+          middleOversRating: stats.phaseRatings?.middleOvers ?? 0,
+          deathOversRating: stats.phaseRatings?.death ?? 0,
+          dotBallPct: 0,
+          boundaryPct: 0,
+        },
+        shotZones: stats.shotZones ?? {},
+        formTrend: 'consistent' as const,
+        last5Scores: stats.formHistory.slice(-5).map(f => f.runs),
+        careerHighlight: `${stats.runs} runs this season at an average of ${stats.avg}`,
       },
-      phaseRatings: stats.phaseRatings,
-      vsSpinRating: stats.vsSpinRating,
-      vsPaceRating: stats.vsPaceRating,
-      shotZones: stats.shotZones,
     });
 
     return report;
@@ -358,13 +404,23 @@ async function refreshTournamentLeaderboard(tournamentId: string, seasonId: stri
     .limit(20)
     .get();
 
+  // Batch-fetch player display names — prevents AI receiving raw IDs (e.g. "uid_abc123")
+  const playerIds = statsSnap.docs.map(d => (d.data() as PlayerSeasonStats).playerId);
+  const playerRefs = playerIds.map(id => db.collection('players').doc(id));
+  const playerSnaps = playerRefs.length > 0 ? await db.getAll(...playerRefs) : [];
+  const nameMap = new Map<string, string>(
+    playerSnaps.map(snap => [snap.id, snap.data()?.name ?? snap.id])
+  );
+
   const players = statsSnap.docs.map(d => {
     const s = d.data() as PlayerSeasonStats;
+    const hasWickets = (s.wickets ?? 0) > 0;
+    const hasRuns = s.runs > 0;
     return {
       playerId: s.playerId,
-      name: s.playerId, // Name resolved client-side
+      name: nameMap.get(s.playerId) ?? s.playerId,
       teamName: '',
-      role: 'batsman',
+      role: hasWickets && hasRuns ? 'all-rounder' : hasWickets ? 'bowler' : 'batsman',
       matches: s.matches,
       runs: s.runs,
       avg: s.avg,

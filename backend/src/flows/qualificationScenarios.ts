@@ -1,8 +1,8 @@
 import { defineFlow } from '@genkit-ai/core';
+import { generate } from '@genkit-ai/ai';
 import { gemini15Pro } from '@genkit-ai/vertexai';
-import { generate } from '@genkit-ai/core';
 import * as z from 'zod';
-import { CRICPULSEIQ_SYSTEM_PROMPT } from '../prompts/systemPrompt';
+import { SYSTEM_INSTRUCTION } from '../prompts/prompts';
 
 export const qualificationScenariosFlow = defineFlow(
   {
@@ -54,7 +54,7 @@ export const qualificationScenariosFlow = defineFlow(
       ? input.standings.find(s => s.teamId === input.focusTeamId)?.teamName
       : null;
 
-    const prompt = `${CRICPULSEIQ_SYSTEM_PROMPT}
+    const prompt = `${SYSTEM_INSTRUCTION}
 
 TASK: Analyse the current qualification picture for ${input.tournamentName}. ${input.qualifyingSpots} teams qualify from this stage.
 
@@ -77,17 +77,8 @@ Return JSON:
       model: gemini15Pro,
       prompt,
       config: { temperature: 0.5 },
-      output: {
-        format: 'json',
-        schema: z.object({
-          qualifiedTeams: z.array(z.string()),
-          eliminatedTeams: z.array(z.string()),
-          onTheEdge: z.array(z.string()),
-          focusTeamScenario: z.string().optional(),
-          keyFixtures: z.array(z.object({ fixture: z.string(), impact: z.string() })),
-          summary: z.string(),
-        }),
-      },
+      // Schema validation handled by defineFlow's outputSchema — no duplicate inline schema
+      output: { format: 'json' },
     });
 
     return response.output() ?? {

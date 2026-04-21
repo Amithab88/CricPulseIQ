@@ -37,7 +37,7 @@ export const liveCommentaryPrompt = definePrompt(
     },
     output: { format: 'text' },
   },
-  `{{SYSTEM_INSTRUCTION}}
+  `${SYSTEM_INSTRUCTION}
 
 TASK: Write punchy live ball-by-ball commentary. Max 2 sentences. Name both players. Reflect the match pressure.
 
@@ -75,7 +75,7 @@ export const aiCoachChatPrompt = definePrompt(
       }),
     },
   },
-  `{{SYSTEM_INSTRUCTION}}
+  `${SYSTEM_INSTRUCTION}
 
 You are this player's personal AI coach. Answer grounded in their specific data. Reference actual numbers. Keep replies under 4 sentences unless detail is requested.
 
@@ -119,7 +119,7 @@ export const matchStrategyPrompt = definePrompt(
       }),
     },
   },
-  `{{SYSTEM_INSTRUCTION}}
+  `${SYSTEM_INSTRUCTION}
 
 TASK: Generate a targeted pre-match plan for {{ownTeamName}} vs {{opponentTeamName}}.
 
@@ -162,7 +162,7 @@ export const scoutingReportPrompt = definePrompt(
       }),
     },
   },
-  `{{SYSTEM_INSTRUCTION}}
+  `${SYSTEM_INSTRUCTION}
 
 TASK: Generate a detailed opposition scouting report. Coaches will use this in a team meeting. Be direct.
 
@@ -201,7 +201,7 @@ export const momentumAnalysisPrompt = definePrompt(
       }),
     },
   },
-  `{{SYSTEM_INSTRUCTION}}
+  `${SYSTEM_INSTRUCTION}
 
 TASK: Analyse the batting innings momentum and identify turning points.
 

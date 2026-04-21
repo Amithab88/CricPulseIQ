@@ -1,4 +1,5 @@
-import { defineFlow, streamingGenerate, generate } from '@genkit-ai/core';
+import { defineFlow } from '@genkit-ai/core';
+import { generate, streamingGenerate } from '@genkit-ai/ai';
 import { gemini15Flash } from '@genkit-ai/vertexai';
 import * as z from 'zod';
 
@@ -48,25 +49,19 @@ export const liveCommentaryFlow = defineFlow(
 Write live commentary for this delivery. If it's a wicket, make it dramatic. If it's a boundary, capture the shot. If it's a dot, build the tension.`;
 
     if (streamingCallback) {
-      const { response } = await streamingGenerate({
+      const { stream, response } = await streamingGenerate({
         model: gemini15Flash,
         prompt: `${SYSTEM_PROMPT}\n\n${userPrompt}`,
         config: { temperature: 0.8 },
-        output: { format: 'json', schema: LiveCommentaryOutput }
       });
 
-      for await (const chunk of response) {
-        // In Genkit, streaming structured output usually yields the full object state or chunks.
-        // For simple text streaming, we'd use response.text(). 
-        // For structured streaming, we usually return the final output but can stream partials if supported.
-        // Here we'll just stream the completed output chunks if possible, 
-        // but for a JSON object it's often better to just generate.
-        // However, the user asked for "streaming output". 
-        // We will stream the text chunks of the commentary if we were just doing string, 
-        // but since it's an object, we'll stream the whole object state.
-        streamingCallback(chunk.output());
+      // `stream` is the async iterable; `response` is the Promise for the final result.
+      for await (const chunk of stream) {
+        streamingCallback({ commentary: chunk.text(), momentumTag: 'steady' });
       }
-      return (await response).output();
+
+      const finalOutput = (await response).output();
+      return finalOutput ?? { commentary: 'No commentary.', momentumTag: 'steady' };
     }
 
     const llmResponse = await generate({

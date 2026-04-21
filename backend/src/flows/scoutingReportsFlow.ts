@@ -1,4 +1,5 @@
-import { defineFlow, generate } from '@genkit-ai/core';
+import { defineFlow } from '@genkit-ai/core';
+import { generate } from '@genkit-ai/ai';
 import { gemini15Pro } from '@genkit-ai/vertexai';
 import * as z from 'zod';
 
@@ -78,7 +79,7 @@ Return exactly as JSON matching the specified schema.`;
     const llmResponse = await generate({
       model: gemini15Pro,
       prompt: `${SYSTEM_PROMPT}\n\n${userPrompt}`,
-      config: { temperature: 0.65 },
+      config: { temperature: 0.45 },
       output: {
         format: 'json',
         schema: ScoutingReportOutput,
