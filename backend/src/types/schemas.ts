@@ -57,6 +57,10 @@ export const MatchSchema = z.object({
     decision: z.enum(['bat', 'bowl']),
   }).optional(),
   momentumScore: z.number().min(-100).max(100).default(0),
+  partnershipRuns: z.number().int().min(0).optional(),
+  partnershipBalls: z.number().int().min(0).optional(),
+  overHistory: z.array(z.any()).optional(),
+  batsmanStatsMap: z.record(z.any()).optional(),
 });
 export type Match = z.infer<typeof MatchSchema>;
 
@@ -145,7 +149,7 @@ export const PlayerSeasonStatsSchema = z.object({
   hundreds: z.number().int(),
   // Bowling
   wickets: z.number().int().default(0),
-  oversBowled: z.number().optional(),
+  oversBowled: z.number().default(0),
   runsConceded: z.number().int().optional(),
   bowlingAvg: z.number().optional(),
   economy: z.number().optional(),

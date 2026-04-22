@@ -6,8 +6,8 @@
  * Includes a simple Bearer token check for security.
  */
 
-import { onRequest } from 'firebase-functions/v2/https';
-import { runFlow } from '@genkit-ai/core';
+import { onFlow, noAuth } from '@genkit-ai/firebase/functions';
+import { runFlow } from '@genkit-ai/flow';
 
 // ── Flow imports ──────────────────────────────────────────────────────────────
 import { liveCommentaryFlow } from '../flows/liveCommentary';
@@ -22,124 +22,60 @@ import { teamOfTournamentFlow } from '../flows/teamOfTournament';
 import { qualificationScenariosFlow } from '../flows/qualificationScenarios';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Security Middleware — Simple Bearer Token Check
-// ─────────────────────────────────────────────────────────────────────────────
-const validateAuth = (req: any, res: any): boolean => {
-  const authHeader = req.headers.authorization;
-  const internalApiKey = process.env.INTERNAL_API_KEY || 'dev-secret-key';
-  
-  if (!authHeader || authHeader !== `Bearer ${internalApiKey}`) {
-    res.status(401).json({ error: 'Unauthorized: Invalid or missing API key' });
-    return false;
-  }
-  return true;
-};
-
-const FLOW_CONFIG = { region: 'us-central1', memory: '512MiB', timeoutSeconds: 60 } as const;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// HTTP endpoints using the onRequest pattern.
+// HTTP endpoints using the onFlow pattern.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const httpLiveCommentary = onRequest(FLOW_CONFIG, async (req, res) => {
-  if (!validateAuth(req, res)) return;
-  try {
-    const result = await runFlow(liveCommentaryFlow, req.body);
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
+const strictAuth = ((auth: any) => { if (!auth) throw new Error('Unauthenticated'); }) as any;
 
-export const httpAiCoachChat = onRequest(FLOW_CONFIG, async (req, res) => {
-  if (!validateAuth(req, res)) return;
-  try {
-    const result = await runFlow(aiCoachChatFlow, req.body);
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
+export const httpLiveCommentary = onFlow(
+  { name: 'http-live-commentary', authPolicy: strictAuth },
+  liveCommentaryFlow as any
+);
 
-export const httpMatchStrategy = onRequest(FLOW_CONFIG, async (req, res) => {
-  if (!validateAuth(req, res)) return;
-  try {
-    const result = await runFlow(matchStrategyFlow, req.body);
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
+export const httpAiCoachChat = onFlow(
+  { name: 'http-ai-coach-chat', authPolicy: strictAuth },
+  aiCoachChatFlow as any
+);
 
-export const httpScoutingReport = onRequest(FLOW_CONFIG, async (req, res) => {
-  if (!validateAuth(req, res)) return;
-  try {
-    const result = await runFlow(scoutingReportFlow, req.body);
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
+export const httpMatchStrategy = onFlow(
+  { name: 'http-match-strategy', authPolicy: strictAuth },
+  matchStrategyFlow as any
+);
 
-export const httpMomentumAnalysis = onRequest(FLOW_CONFIG, async (req, res) => {
-  if (!validateAuth(req, res)) return;
-  try {
-    const result = await runFlow(momentumAnalysisFlow, req.body);
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
+export const httpScoutingReport = onFlow(
+  { name: 'http-scouting-report', authPolicy: strictAuth },
+  scoutingReportFlow as any
+);
 
-export const httpPlayerWeakness = onRequest(FLOW_CONFIG, async (req, res) => {
-  if (!validateAuth(req, res)) return;
-  try {
-    const result = await runFlow(playerWeaknessFlow, req.body);
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
+export const httpMomentumAnalysis = onFlow(
+  { name: 'http-momentum-analysis', authPolicy: strictAuth },
+  momentumAnalysisFlow as any
+);
 
-export const httpFieldPlacement = onRequest(FLOW_CONFIG, async (req, res) => {
-  if (!validateAuth(req, res)) return;
-  try {
-    const result = await runFlow(fieldPlacementFlow, req.body);
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
+export const httpPlayerWeakness = onFlow(
+  { name: 'http-player-weakness', authPolicy: strictAuth },
+  playerWeaknessFlow as any
+);
 
-export const httpOnboardingWelcome = onRequest(FLOW_CONFIG, async (req, res) => {
-  if (!validateAuth(req, res)) return;
-  try {
-    const result = await runFlow(onboardingWelcomeFlow, req.body);
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
+export const httpFieldPlacement = onFlow(
+  { name: 'http-field-placement', authPolicy: strictAuth },
+  fieldPlacementFlow as any
+);
 
-export const httpTeamOfTournament = onRequest(FLOW_CONFIG, async (req, res) => {
-  if (!validateAuth(req, res)) return;
-  try {
-    const result = await runFlow(teamOfTournamentFlow, req.body);
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
+export const httpOnboardingWelcome = onFlow(
+  { name: 'http-onboarding-welcome', authPolicy: strictAuth },
+  onboardingWelcomeFlow as any
+);
 
-export const httpQualificationScenarios = onRequest(FLOW_CONFIG, async (req, res) => {
-  if (!validateAuth(req, res)) return;
-  try {
-    const result = await runFlow(qualificationScenariosFlow, req.body);
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
+export const httpTeamOfTournament = onFlow(
+  { name: 'http-team-of-tournament', authPolicy: strictAuth },
+  teamOfTournamentFlow as any
+);
+
+export const httpQualificationScenarios = onFlow(
+  { name: 'http-qualification-scenarios', authPolicy: strictAuth },
+  qualificationScenariosFlow as any
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPOSITE FLOW — runFlow() for internal chaining
@@ -168,6 +104,7 @@ export async function runBallAnalysisPipeline(params: {
   batsmanStats: { runs: number; balls: number; sr: number };
   matchId: string;
   bowlerTeam: string;
+  format: string;
   overByOverRuns: { over: number; runs: number; wickets: number; dots: number }[];
 }): Promise<{ commentary: string; newMomentumScore: number }> {
 

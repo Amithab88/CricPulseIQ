@@ -1,4 +1,4 @@
-import { defineFlow } from '@genkit-ai/core';
+import { defineFlow } from '@genkit-ai/flow';
 import { generate } from '@genkit-ai/ai';
 import { gemini15Flash } from '@genkit-ai/vertexai';
 import * as z from 'zod';
@@ -81,7 +81,7 @@ Return exactly as JSON matching the specified schema.`;
       fieldChanges: [],
       bowlingLineAdjustment: "No specific adjustment.",
       primaryWeakness: "Unknown.",
-      confidenceLevel: "low",
+      confidenceLevel: "low" as const,
     };
   }
 );

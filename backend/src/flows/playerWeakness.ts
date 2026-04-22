@@ -1,4 +1,4 @@
-import { defineFlow } from '@genkit-ai/core';
+import { defineFlow } from '@genkit-ai/flow';
 import { generate } from '@genkit-ai/ai';
 import { gemini15Pro } from '@genkit-ai/vertexai';
 import * as z from 'zod';
@@ -86,7 +86,7 @@ Return exactly as JSON matching the specified schema.`;
       exploitablePatterns: ["No distinct patterns identified.", "Monitor upcoming matches."],
       strongestPhase: { phase: "Unknown", reason: "Insufficient phase data." },
       bowlingStrategy: "Use standard stock deliveries until a pattern emerges.",
-      overallRating: "solid",
+      overallRating: "solid" as const,
     };
   }
 );

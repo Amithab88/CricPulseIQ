@@ -1,4 +1,4 @@
-import { defineFlow } from '@genkit-ai/core';
+import { defineFlow } from '@genkit-ai/flow';
 import { generate } from '@genkit-ai/ai';
 import { gemini15Flash } from '@genkit-ai/vertexai';
 import * as z from 'zod';

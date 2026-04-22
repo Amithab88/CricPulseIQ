@@ -1,8 +1,8 @@
-import { defineFlow } from '@genkit-ai/core';
+import { defineFlow } from '@genkit-ai/flow';
 import { generate } from '@genkit-ai/ai';
 import { gemini15Pro } from '@genkit-ai/vertexai';
 import * as z from 'zod';
-import { SYSTEM_INSTRUCTION } from '../prompts/prompts';
+const SYSTEM_INSTRUCTION = `You are an expert cricket analyst tasked with selecting the best performing players of a tournament. You balance raw stats with match impact.`;
 
 export const teamOfTournamentFlow = defineFlow(
   {
@@ -38,9 +38,9 @@ export const teamOfTournamentFlow = defineFlow(
       tournamentNarrative: z.string(),
     }),
   },
-  async (input) => {
+  async (input: any) => {
     const playerList = input.players
-      .map(p => {
+      .map((p: any) => {
         const batting = p.runs !== undefined ? `Runs: ${p.runs}, Avg: ${p.avg}, SR: ${p.strikeRate}` : '';
         const bowling = p.wickets !== undefined ? `Wkts: ${p.wickets}, Econ: ${p.economy}, Avg: ${p.bowlingAvg}` : '';
         return `- ${p.name} (${p.teamName}, ${p.role}), MVP: ${p.mvpScore} — ${[batting, bowling].filter(Boolean).join(' | ')}`;

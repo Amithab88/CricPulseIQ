@@ -1,4 +1,4 @@
-import { defineFlow } from '@genkit-ai/core';
+import { defineFlow } from '@genkit-ai/flow';
 import { generate } from '@genkit-ai/ai';
 import { gemini15Pro } from '@genkit-ai/vertexai';
 import * as z from 'zod';
@@ -64,17 +64,19 @@ Return your response as a JSON object with:
 - "reply": Your coaching response (concise, data-driven).
 - "suggestedChips": Exactly 3 relevant follow-up questions/actions (e.g. "Who should open?", "Bowling at death?").`;
 
-    // Extract the latest user message and the history
-    const history = messages.slice(0, -1).map(m => ({
-      role: m.role,
-      content: [{ text: m.content }]
-    }));
+    // For Genkit 0.5.0, we provide the system prompt as the first message in the history
+    const history = [
+      { role: 'system', content: [{ text: systemPrompt }] },
+      ...messages.slice(0, -1).map(m => ({
+        role: m.role,
+        content: [{ text: m.content }]
+      }))
+    ];
     const userMsg = messages[messages.length - 1].content;
 
     const llmResponse = await generate({
       model: gemini15Pro,
-      system: systemPrompt,   // ← system prompt in dedicated field, not concatenated into user turn
-      history: history,
+      history: history as any,
       prompt: userMsg,         // ← user message only
       config: { temperature: 0.7 },
       output: {

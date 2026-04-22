@@ -7,7 +7,7 @@
 import { onDocumentCreated, onDocumentUpdated } from 'firebase-functions/v2/firestore';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
-import { runFlow } from '@genkit-ai/core';
+import { runFlow } from '@genkit-ai/flow';
 import { Delivery, PlayerSeasonStats } from '../types/schemas';
 import { runBallAnalysisPipeline } from './httpHandler';
 import { liveCommentaryFlow } from '../flows/liveCommentary';
@@ -36,6 +36,7 @@ export const onDeliveryCreated = onDocumentCreated(
 
     // ── Step A: Update live score transactionally ──────────────────────────
     let currentMomentum = 0;
+    let txContext: any = null;
 
     await db.runTransaction(async (tx) => {
       const matchSnap = await tx.get(matchRef);
@@ -54,73 +55,114 @@ export const onDeliveryCreated = onDocumentCreated(
       const newBalls = currentBalls + (isLegalBall ? 1 : 0);
       const newOvers = parseFloat(`${Math.floor(newBalls / 6)}.${newBalls % 6}`);
 
+      let pRuns = (match.partnershipRuns ?? 0) + delivery.runs + delivery.extras;
+      let pBalls = (match.partnershipBalls ?? 0) + (isLegalBall ? 1 : 0);
+
+      let oHistory = match.overHistory ?? [];
+      let currentOver = oHistory.find((o: any) => o.over === delivery.over);
+      if (!currentOver) {
+        currentOver = { over: delivery.over, runs: 0, wickets: 0, dots: 0 };
+        oHistory.push(currentOver);
+      }
+      currentOver.runs += delivery.runs + delivery.extras;
+      if (delivery.isWicket) currentOver.wickets += 1;
+      if (delivery.runs === 0 && delivery.extras === 0 && isLegalBall) currentOver.dots += 1;
+
+      let bStatsMap = match.batsmanStatsMap ?? {};
+      if (!bStatsMap[delivery.batsmanId]) bStatsMap[delivery.batsmanId] = { runs: 0, balls: 0 };
+      bStatsMap[delivery.batsmanId].runs += delivery.runs;
+      if (delivery.extraType !== 'wide') bStatsMap[delivery.batsmanId].balls += 1;
+
+      txContext = {
+        partnershipRuns: pRuns,
+        partnershipBalls: pBalls,
+        overHistory: oHistory,
+        batsmanStatsMap: bStatsMap,
+        hasExistingHistory: match.overHistory !== undefined
+      };
+
+      const nextPRuns = delivery.isWicket ? 0 : pRuns;
+      const nextPBalls = delivery.isWicket ? 0 : pBalls;
+
       tx.update(matchRef, {
         [`${inningsKey}.runs`]: newRuns,
         [`${inningsKey}.wickets`]: newWickets,
         [`${inningsKey}.overs`]: newOvers,
         currentInnings: delivery.innings,
+        partnershipRuns: nextPRuns,
+        partnershipBalls: nextPBalls,
+        overHistory: oHistory,
+        batsmanStatsMap: bStatsMap,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
     });
 
     // ── Step B: Compute Context for AI ─────────────────────────────
-    const prevBalls = await db
-      .collection('matches').doc(matchId).collection('deliveries')
-      .where('innings', '==', delivery.innings)
-      .orderBy('over').orderBy('ball')
-      .get();
-
     let partnershipRuns = 0;
     let partnershipBalls = 0;
     let batsmanRuns = 0;
     let batsmanBalls = 0;
+    let overByOverRuns: any[] = [];
 
-    const overRunMap = new Map<number, { runs: number; wickets: number; dots: number }>();
-    
-    // Find the latest wicket to calculate current partnership
-    const deliveries = prevBalls.docs.map(d => d.data() as Delivery);
-    const lastWicketIndex = deliveries.map(d => d.isWicket).lastIndexOf(true);
-    const partnershipDeliveries = lastWicketIndex === -1 ? deliveries : deliveries.slice(lastWicketIndex + 1);
+    // "Only re-read full deliveries when a wicket falls to reset partnership."
+    // We efficiently calculate it during the transaction now, so we only need a full
+    // re-read if the match document lacks history (e.g. legacy match migration).
+    if (!txContext || !txContext.hasExistingHistory) {
+      const prevBalls = await db
+        .collection('matches').doc(matchId).collection('deliveries')
+        .where('innings', '==', delivery.innings)
+        .orderBy('over').orderBy('ball')
+        .get();
 
-    for (const d of partnershipDeliveries) {
-      partnershipRuns += d.runs + d.extras;
-      if (!['wide', 'no-ball'].includes(d.extraType ?? '')) {
-        partnershipBalls++;
-      }
-    }
+      const overRunMap = new Map<number, { runs: number; wickets: number; dots: number }>();
+      const deliveries = prevBalls.docs.map(d => d.data() as Delivery);
+      const lastWicketIndex = deliveries.map(d => d.isWicket).lastIndexOf(true);
+      const partnershipDeliveries = lastWicketIndex === -1 ? deliveries : deliveries.slice(lastWicketIndex + 1);
 
-    for (const d of deliveries) {
-      // Per-over aggregation for momentum
-      const existing = overRunMap.get(d.over) ?? { runs: 0, wickets: 0, dots: 0 };
-      const isDot = d.runs === 0 && d.extras === 0 && !['wide', 'no-ball'].includes(d.extraType ?? '');
-      
-      overRunMap.set(d.over, {
-        runs: existing.runs + d.runs + d.extras,
-        wickets: existing.wickets + (d.isWicket ? 1 : 0),
-        dots: existing.dots + (isDot ? 1 : 0)
-      });
-
-      // Stats for the current batsman
-      if (d.batsmanId === delivery.batsmanId) {
-        batsmanRuns += d.runs;
-        if (d.extraType !== 'wide') {
-          batsmanBalls++;
+      for (const d of partnershipDeliveries) {
+        partnershipRuns += d.runs + d.extras;
+        if (!['wide', 'no-ball'].includes(d.extraType ?? '')) {
+          partnershipBalls++;
         }
       }
-    }
 
-    const overByOverRuns = Array.from(overRunMap.entries())
-      .map(([over, data]) => ({ over, ...data }))
-      .sort((a, b) => a.over - b.over);
+      for (const d of deliveries) {
+        const existing = overRunMap.get(d.over) ?? { runs: 0, wickets: 0, dots: 0 };
+        const isDot = d.runs === 0 && d.extras === 0 && !['wide', 'no-ball'].includes(d.extraType ?? '');
+        
+        overRunMap.set(d.over, {
+          runs: existing.runs + d.runs + d.extras,
+          wickets: existing.wickets + (d.isWicket ? 1 : 0),
+          dots: existing.dots + (isDot ? 1 : 0)
+        });
+
+        if (d.batsmanId === delivery.batsmanId) {
+          batsmanRuns += d.runs;
+          if (d.extraType !== 'wide') {
+            batsmanBalls++;
+          }
+        }
+      }
+
+      overByOverRuns = Array.from(overRunMap.entries())
+        .map(([over, data]) => ({ over, ...data }))
+        .sort((a, b) => a.over - b.over);
+    } else {
+      partnershipRuns = txContext.partnershipRuns;
+      partnershipBalls = txContext.partnershipBalls;
+      overByOverRuns = txContext.overHistory;
+      batsmanRuns = txContext.batsmanStatsMap[delivery.batsmanId]?.runs ?? 0;
+      batsmanBalls = txContext.batsmanStatsMap[delivery.batsmanId]?.balls ?? 0;
+    }
 
     // ── Resolve player display names before AI call ─────────────────────────
     // Passing raw Firestore IDs (e.g. "uid_xk29a") would produce broken commentary.
-    const [batsmanSnap, bowlerSnap] = await Promise.all([
+    const [batsmanDoc, bowlerDoc] = await Promise.all([
       db.collection('players').doc(delivery.batsmanId).get(),
       db.collection('players').doc(delivery.bowlerId).get(),
     ]);
-    const batsmanName = batsmanSnap.data()?.name ?? delivery.batsmanId;
-    const bowlerName = bowlerSnap.data()?.name ?? delivery.bowlerId;
+    const batsmanName = batsmanDoc.data()?.name ?? delivery.batsmanId;
+    const bowlerName = bowlerDoc.data()?.name ?? delivery.bowlerId;
 
     // ── Step C: Chain runFlow() — commentary + momentum ────────────────────
     const matchSnap = await matchRef.get();
@@ -291,17 +333,15 @@ export const onMatchCompleted = onDocumentUpdated(
       const totalWickets = (existing.wickets ?? 0) + wicketsTaken;
       // Use dedicated bowling accumulators — existing.innings is batting innings count,
       // using it as the overs denominator corrupts economy for all-rounders.
-      const existingOversBowled = (existing as any).oversBowled ?? 0;
-      const existingRunsConceded = (existing as any).runsConceded ?? 0;
-      const newOversBowled = existingOversBowled + oversBowled;
-      const newRunsConceded = existingRunsConceded + runsConceded;
+      const totalOvers = (existing.oversBowled ?? 0) + oversBowled;
+      const newRunsConceded = (existing.runsConceded ?? 0) + runsConceded;
 
       batch.set(statsRef, {
         playerId, seasonId,
         wickets: totalWickets,
-        oversBowled: newOversBowled,
+        oversBowled: totalOvers,
         runsConceded: newRunsConceded,
-        economy: newOversBowled > 0 ? parseFloat((newRunsConceded / newOversBowled).toFixed(2)) : 0,
+        economy: totalOvers > 0 ? parseFloat((newRunsConceded / totalOvers).toFixed(2)) : 0,
         bowlingAvg: totalWickets > 0 ? parseFloat((newRunsConceded / totalWickets).toFixed(2)) : null,
         updatedAt: new Date().toISOString(),
       }, { merge: true });
@@ -361,27 +401,21 @@ export const generateScoutingReport = onCall(
         battingStyle: playerProfile?.battingStyle ?? 'right-hand bat',
         bowlingStyle: playerProfile?.bowlingStyle ?? 'none',
         seasonStats: {
-          matches: stats.matches,
-          runs: stats.runs,
-          avg: stats.avg,
-          strikeRate: stats.strikeRate,
-          highScore: stats.highScore,
-          fifties: stats.fifties,
-          hundreds: stats.hundreds,
+          ...stats,
           vsSpinAvg: stats.vsSpinRating,
-          vsSpinSR: 0,
+          vsSpinSR: stats.vsSpinRating,
           vsPaceAvg: stats.vsPaceRating,
-          vsPaceSR: 0,
-          powerplayRating: stats.phaseRatings?.powerplay ?? 0,
-          middleOversRating: stats.phaseRatings?.middleOvers ?? 0,
-          deathOversRating: stats.phaseRatings?.death ?? 0,
+          vsPaceSR: stats.vsPaceRating,
+          powerplayRating: stats.phaseRatings?.powerplay ?? 50,
+          middleOversRating: stats.phaseRatings?.middleOvers ?? 50,
+          deathOversRating: stats.phaseRatings?.death ?? 50,
           dotBallPct: 0,
           boundaryPct: 0,
         },
         shotZones: stats.shotZones ?? {},
-        formTrend: 'consistent' as const,
+        formTrend: 'consistent',
         last5Scores: stats.formHistory.slice(-5).map(f => f.runs),
-        careerHighlight: `${stats.runs} runs this season at an average of ${stats.avg}`,
+        careerHighlight: `${stats.runs} runs this season`,
       },
     });
 
@@ -439,7 +473,7 @@ async function refreshTournamentLeaderboard(tournamentId: string, seasonId: stri
   });
 
   await db.collection('tournaments').doc(tournamentId).update({
-    'leaderboard.mvpIndex': result.teamOf11.map(p => ({
+    'leaderboard.mvpIndex': result.teamOf11.map((p: any) => ({
       playerId: p.playerId,
       playerName: p.name,
       teamId: '',

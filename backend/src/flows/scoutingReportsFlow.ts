@@ -1,4 +1,4 @@
-import { defineFlow } from '@genkit-ai/core';
+import { defineFlow } from '@genkit-ai/flow';
 import { generate } from '@genkit-ai/ai';
 import { gemini15Pro } from '@genkit-ai/vertexai';
 import * as z from 'zod';
@@ -52,14 +52,14 @@ export const scoutingReportFlow = defineFlow(
     inputSchema: ScoutingReportInput,
     outputSchema: ScoutingReportOutput,
   },
-  async (input) => {
+  async (input: any) => {
     const { player } = input;
     const s = player.seasonStats;
 
     const topZones = Object.entries(player.shotZones)
-      .sort(([, a], [, b]) => b.runs - a.runs)
+      .sort(([, a]: [string, any], [, b]: [string, any]) => b.runs - a.runs)
       .slice(0, 3)
-      .map(([zone, data]) => `${zone} (${data.runs} runs)`)
+      .map(([zone, data]: [string, any]) => `${zone} (${data.runs} runs)`)
       .join(', ');
 
     const userPrompt = `Write a professional three-paragraph scouting report on ${player.name} (${player.battingStyle} bat, ${player.bowlingStyle}).
@@ -90,7 +90,7 @@ Return exactly as JSON matching the specified schema.`;
       paragraph1_profile: "Insufficient data.",
       paragraph2_weaknesses: "Insufficient data.",
       paragraph3_strategy: "Insufficient data.",
-      scoutingVerdict: "monitor",
+      scoutingVerdict: "monitor" as const,
       keyBowlingTactic: "Unknown.",
     };
   }

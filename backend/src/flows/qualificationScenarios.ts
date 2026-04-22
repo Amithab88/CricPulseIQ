@@ -1,8 +1,8 @@
-import { defineFlow } from '@genkit-ai/core';
+import { defineFlow } from '@genkit-ai/flow';
 import { generate } from '@genkit-ai/ai';
 import { gemini15Pro } from '@genkit-ai/vertexai';
 import * as z from 'zod';
-import { SYSTEM_INSTRUCTION } from '../prompts/prompts';
+const SYSTEM_INSTRUCTION = `You are an expert sports analyst tasked with outlining the qualification scenarios for teams in a tournament. Be precise about mathematical possibilities versus practical probabilities.`;
 
 export const qualificationScenariosFlow = defineFlow(
   {

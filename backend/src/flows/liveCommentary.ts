@@ -1,5 +1,5 @@
-import { defineFlow } from '@genkit-ai/core';
-import { generate, streamingGenerate } from '@genkit-ai/ai';
+import { defineFlow } from '@genkit-ai/flow';
+import { generate, generateStream } from '@genkit-ai/ai';
 import { gemini15Flash } from '@genkit-ai/vertexai';
 import * as z from 'zod';
 
@@ -49,19 +49,19 @@ export const liveCommentaryFlow = defineFlow(
 Write live commentary for this delivery. If it's a wicket, make it dramatic. If it's a boundary, capture the shot. If it's a dot, build the tension.`;
 
     if (streamingCallback) {
-      const { stream, response } = await streamingGenerate({
+      const { stream, response } = await generateStream({
         model: gemini15Flash,
         prompt: `${SYSTEM_PROMPT}\n\n${userPrompt}`,
         config: { temperature: 0.8 },
       });
 
-      // `stream` is the async iterable; `response` is the Promise for the final result.
-      for await (const chunk of stream) {
-        streamingCallback({ commentary: chunk.text(), momentumTag: 'steady' });
+      // In Genkit 0.5.x, stream and response are functions that return the iterable and promise.
+      for await (const chunk of stream()) {
+        streamingCallback({ commentary: (chunk as any).text?.() || '...', momentumTag: 'steady' });
       }
 
-      const finalOutput = (await response).output();
-      return finalOutput ?? { commentary: 'No commentary.', momentumTag: 'steady' };
+      const finalOutput = (await response()).output() as any;
+      return finalOutput ?? { commentary: 'No commentary.', momentumTag: 'steady' as const };
     }
 
     const llmResponse = await generate({
@@ -74,9 +74,9 @@ Write live commentary for this delivery. If it's a wicket, make it dramatic. If 
       },
     });
 
-    return llmResponse.output() ?? {
+    return llmResponse.output() as any ?? {
       commentary: "No commentary available.",
-      momentumTag: "steady"
+      momentumTag: "steady" as const
     };
   }
 );
